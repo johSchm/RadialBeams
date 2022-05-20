@@ -1,10 +1,9 @@
 # Learn Continuous Rotation Canonicalization with Radial Beam Sampling 
 
-This is the official GitHub repository to our paper: 
-**Learn Continuous Rotation Canonicalization with Radial Beam Sampling**
-by Johann Schmidt and Sebastian Stober.
-We call our model **BIC**, short for Radial-Beam-based Image Canonicalization.
-The high-level model pipeline look like this (find more details in the paper):
+This is the official GitHub repository for our paper: 
+**Learn Continuous Rotation Canonicalization with Radial Beam Sampling**.
+We propose a maximal continuous angle regressor using radial beam sampling, which is able to canonicalize arbitrary center-rotated input images.
+We call our model **BIC** (Radial-Beam-based Image Canonicalization):
 
 ![BIC](./img/model.svg)
 
