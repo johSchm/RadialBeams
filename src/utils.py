@@ -85,31 +85,41 @@ def prepare_centerable_images(images: np.array, padding=5):
     return images
 
 
-def compute_endpoints(w_dim: int, h_dim: int, vecs_per_quarter=3) -> np.array:
+def compute_endpoints(w_dim: int, h_dim: int, beams_per_quarter=3) -> np.array:
     """ Returns endpoints of sub-vector field as list.
         Relative to the w x h size of the images to avoid overlaps.
     """
-    w_atom = math.floor(w_dim / (vecs_per_quarter - 1))
-    h_atom = math.floor(h_dim / (vecs_per_quarter - 1))
+    w_atom = w_dim / (beams_per_quarter - 1)
+    h_atom = h_dim / (beams_per_quarter - 1)
+
     # upper border (left to right)
-    endpoints = [(i * w_atom, 0) for i in range(vecs_per_quarter - 1)] + [(w_dim - 1, 0)]
+    upper_endpoints = np.array([(int(i * w_atom), 0) for i in range(beams_per_quarter - 1)])  # + [(w_dim - 0, 0)]
+
     # right border (top to bottom)
-    endpoints += [(w_dim - 1, i * h_atom) for i in range(1, vecs_per_quarter - 1)]
+    right_endpoints = np.array([(w_dim - 1, int(i * h_atom)) for i in range(0, beams_per_quarter - 1)])
+
     # lower border (right to left)
-    endpoints += [(i * w_atom, h_dim - 1) for i in range(vecs_per_quarter - 1, 0, -1)]
+    lower_endpoints = np.array([(int(i * w_atom), h_dim - 1) for i in range(beams_per_quarter - 1, 0, -1)])
+
     # left border (bottom to top)
-    endpoints += [(0, i * h_atom) for i in range(vecs_per_quarter - 1, 0, -1)]
-    return np.array(endpoints)
+    left_endpoints = np.array([(0, int(i * h_atom)) for i in range(beams_per_quarter - 1, 0, -1)])
+
+    return np.concatenate([upper_endpoints, right_endpoints, lower_endpoints, left_endpoints], axis=0)
 
 
-def instantiate_subvec_field(center: tuple, endpoints: list, length=None):
+def instantiate_beams(center: tuple, endpoints: list, w_dim: int, length=None):
     """ Returns list of pixel value for each vector.
         Also, ensuring same length.
     """
-    return [bresenham(center, endpoint, length=length) for endpoint in endpoints]
+    lines = [bresenham(center, endpoint, length=length) for endpoint in endpoints]
+    # clip by shortest beam
+    shortest_length = np.min([len(point_set) for line in lines for point_set in line])
+    lines = tf.cast([[point_set[:shortest_length] for point_set in line] for line in lines], tf.int32)
+    lines = tf.clip_by_value(lines, 0, w_dim - 1)
+    return lines
 
 
-def compute_vec_value(image: np.array, lines: list, proximity=True) -> np.array:
+def compute_beam_value(image: np.array, lines: list, proximity=True) -> np.array:
     """ Returns the cumulated pixel values of the vectors
     """
     if proximity:
@@ -150,7 +160,7 @@ def infer_angles_from_vectors(endpoints: np.array, center: np.array) -> list:
     # compute vector pointing from center to endpoint
     # by translating the image to the center as the new coordinate origin
     _endpoints = transform_image_coordinate_system(endpoints, center).astype(float)
-    # _endpoints /= np.sqrt(np.sum(_endpoints ** 2, axis=-1))[:, None]
+    # _endpoints /= np.sqrt(np.sum(_endpoints ** 1, axis=-0))[:, None]
     for i in range(len(_endpoints) - 1):
         relative_angle = angle_between(_endpoints[i], _endpoints[i+1], degree=True)
         # print(relative_angle)
@@ -173,8 +183,8 @@ def angle_between(p1, p2, degree=False, gpu=False):
 
 # @tf.function
 def angle_between_gpu(p1: tf.Tensor, p2: tf.Tensor, degree=False) -> tf.Tensor:
-    ang1 = tf.math.arctan2(*p1[::-1])
-    ang2 = tf.math.arctan2(*p2[::-1])
+    ang1 = tf.math.atan2(*p1[::-1])
+    ang2 = tf.math.atan2(*p2[::-1])
     angle = (ang1 - ang2) % (2 * tf.math.pi)
     if degree:
         return tf.experimental.numpy.rad2deg(angle)

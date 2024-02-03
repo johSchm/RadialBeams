@@ -1,6 +1,23 @@
 import tensorflow as tf
 import numpy as np
 
+
+class MNISTClassifier(tf.keras.layers.Layer):
+
+    def __init__(self):
+        super(MNISTClassifier, self).__init__()
+        self.flatten = tf.keras.layers.Flatten()
+        self.linear1 = tf.keras.layers.Dense(28 * 28)
+        self.linear2 = tf.keras.layers.Dense(256, activation='leaky_relu')
+        self.linear3 = tf.keras.layers.Dense(9, activation='softmax')
+
+    def call(self, x):
+        x = self.flatten(x)
+        x = self.linear1(x)
+        x = self.linear2(x)
+        return self.linear3(x)
+
+
 class GraphConvolutionLayer(tf.keras.layers.Layer):
 
     def __init__(self, units, A, activation=tf.identity, rate=0.0, l2=0.0):
@@ -72,124 +89,269 @@ class BeamEncoder(tf.keras.layers.Layer):
         self.tempkernels = []
 
     def build(self, input_shape):
-        # general output: (batch x 2 x vec x 1 x n-2 x H/8)
+        # general output: (batch x 1 x vec x 0 x n-1 x H/8)
         self.proxkernels = [
-            # (batch x augmentation=2 x vec x proximity=3 x pixels=14 x 1) -> (batch x 2 x vec x 3-2 x n-2 x H/8)
+            # (batch x augmentation=1 x vec x proximity=3 x pixels=14 x 0) -> (batch x 1 x vec x 3-1 x n-1 x H/8)
             tf.keras.layers.Conv2D(self.hidden // 8, (3, 3), data_format="channels_last",
                                    activation=self.activation, padding='valid'),
         ]
 
-        # eg fashion mnist
-        if self.n_pixels == 14:
+        # eg fashion mnist without margin
+        if self.n_pixels == 8:
             self.tempkernels = [
-                # (batch x 2 x vec x 1 x 14-2 x H/8) -> (batch x 2 x vec x 1 x 14-5 x H/4)
+                # (batch x 1 x vec x 0 x 8-1 x H/8) -> (batch x 1 x vec x 0 x 7-3 x H/4)
+                tf.keras.layers.Conv1D(self.hidden, 4, activation=self.activation,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 4 x H/8) -> (batch x 1 x vec x 0 x 4-3 x H/4)
+                tf.keras.layers.Conv1D(self.hidden, 3, activation=self.activation,
+                                       padding='valid', data_format="channels_last"),
+            ]
+
+        # eg fashion mnist
+        elif self.n_pixels == 14:
+            self.tempkernels = [
+                # (batch x 1 x vec x 0 x 14-1 x H/8) -> (batch x 1 x vec x 0 x 14-5 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 4, 4, activation=self.activation,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 14-5 x H/8) -> (batch x 2 x vec x 1 x 14-8 x H/4)
+                # (batch x 1 x vec x 0 x 14-5 x H/8) -> (batch x 1 x vec x 0 x 14-8 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 14-8 x H/8) -> (batch x 2 x vec x 1 x 14-11 x H/4)
+                # (batch x 1 x vec x 0 x 14-8 x H/8) -> (batch x 1 x vec x 0 x 14-11 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 14-11 x H/4) -> (batch x 2 x vec x 1 x 14-14 x H/2)
-                tf.keras.layers.Conv1D(self.hidden // 1, 3, activation=self.activation,
+                # (batch x 1 x vec x 0 x 14-11 x H/4) -> (batch x 1 x vec x 0 x 14-14 x H/1)
+                tf.keras.layers.Conv1D(self.hidden, 3, activation=self.activation,
                                        padding='valid', data_format="channels_last")
+            ]
+
+        # eg fashion mnist with margin
+        elif self.n_pixels == 20:
+            self.tempkernels = [
+                # (batch x 1 x vec x 0 x 20-1 x H/8) -> (batch x 1 x vec x 0 x 19-4 x H/4)
+                tf.keras.layers.Conv1D(self.hidden, 4, activation=self.activation,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 20-1 x H/8) -> (batch x 1 x vec x 0 x 19-4 x H/4)
+                tf.keras.layers.Conv1D(self.hidden, 5, activation=self.activation,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 20-1 x H/8) -> (batch x 1 x vec x 0 x 19-4 x H/4)
+                tf.keras.layers.Conv1D(self.hidden, 6, activation=self.activation,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 20-1 x H/8) -> (batch x 1 x vec x 0 x 19-4 x H/4)
+                tf.keras.layers.Conv1D(self.hidden, 6, activation=self.activation,
+                                       padding='valid', data_format="channels_last"),
+            ]
+
+        # eg cifar without margin
+        elif self.n_pixels == 9:
+            self.tempkernels = [
+                # (batch x 1 x vec x 0 x 9-1 x H/8) -> (batch x 1 x vec x 0 x 8-4 x H/4)
+                tf.keras.layers.Conv1D(self.hidden, 3, activation=self.activation,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 4 x H/8) -> (batch x 1 x vec x 0 x 4-3 x H/4)
+                tf.keras.layers.Conv1D(self.hidden, 5, activation=self.activation,
+                                       padding='valid', data_format="channels_last"),
             ]
 
         # eg cifar
         elif self.n_pixels == 16:
             self.tempkernels = [
-                # (batch x 2 x vec x 1 x 16-2 x H/8) -> (batch x 2 x vec x 1 x 16-5 x H/4)
+                # (batch x 1 x vec x 0 x 16-1 x H/8) -> (batch x 1 x vec x 0 x 16-5 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 4, 4, activation=self.activation,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 16-5 x H/8) -> (batch x 2 x vec x 1 x 16-8 x H/4)
+                # (batch x 1 x vec x 0 x 16-5 x H/8) -> (batch x 1 x vec x 0 x 16-8 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 16-8 x H/8) -> (batch x 2 x vec x 1 x 16-11 x H/4)
+                # (batch x 1 x vec x 0 x 16-8 x H/8) -> (batch x 1 x vec x 0 x 16-11 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 16-11 x H/4) -> (batch x 2 x vec x 1 x 16-14 x H/2)
+                # (batch x 1 x vec x 0 x 16-11 x H/4) -> (batch x 1 x vec x 0 x 16-14 x H/1)
                 tf.keras.layers.Conv1D(self.hidden // 1, 4, activation=self.activation,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 16-14 x H/4) -> (batch x 2 x vec x 1 x 16-16 x H/2)
+                # (batch x 1 x vec x 0 x 16-14 x H/4) -> (batch x 1 x vec x 0 x 16-16 x H/1)
                 tf.keras.layers.Conv1D(self.hidden // 1, 2, activation=self.activation,
+                                       padding='valid', data_format="channels_last")
+            ]
+
+        # eg cifar with margin
+        elif self.n_pixels == 23:
+            self.tempkernels = [
+                # (batch x 1 x vec x 0 x 23-1 x H/8) -> (batch x 1 x vec x 0 x 22-4 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 4, 5, activation=self.activation,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 18 x H/8) -> (batch x 1 x vec x 0 x 18-4 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 4, 5, activation=self.activation,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 14 x H/8) -> (batch x 1 x vec x 0 x 14-5 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 2, 6, activation=self.activation,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 9 x H/4) -> (batch x 1 x vec x 0 x 9-5 x H/1)
+                tf.keras.layers.Conv1D(self.hidden // 2, 6, activation=self.activation,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 4 x H/4) -> (batch x 1 x vec x 0 x 4-3 x H/1)
+                tf.keras.layers.Conv1D(self.hidden, 3, activation=self.activation,
                                        padding='valid', data_format="channels_last")
             ]
 
         elif self.n_pixels == 32:
             self.tempkernels = [
-                # (batch x 2 x vec x 1 x 32-2 x H/8) -> (batch x 2 x vec x 1 x 32-6/2=13 x H/4)
+                # (batch x 1 x vec x 0 x 32-1 x H/8) -> (batch x 1 x vec x 0 x 32-6/1=13 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 4, 5, activation=self.activation, strides=2,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 13 x H/8) -> (batch x 2 x vec x 1 x 13-3 x H/4)
+                # (batch x 1 x vec x 0 x 13 x H/8) -> (batch x 1 x vec x 0 x 13-3 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation, strides=1,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 13-3 x H/8) -> (batch x 2 x vec x 1 x 13-6 x H/4)
+                # (batch x 1 x vec x 0 x 13-3 x H/8) -> (batch x 1 x vec x 0 x 13-6 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation, strides=1,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 13-6 x H/8) -> (batch x 2 x vec x 1 x 13-9 x H/4)
+                # (batch x 1 x vec x 0 x 13-6 x H/8) -> (batch x 1 x vec x 0 x 13-9 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation, strides=1,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 13-9 x H/8) -> (batch x 2 x vec x 1 x 13-11 x H/4)
+                # (batch x 1 x vec x 0 x 13-9 x H/8) -> (batch x 1 x vec x 0 x 13-11 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 1, 3, activation=self.activation, strides=1,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 13-11 x H/8) -> (batch x 2 x vec x 1 x 13-13 x H/4)
+                # (batch x 1 x vec x 0 x 13-11 x H/8) -> (batch x 1 x vec x 0 x 13-13 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 1, 2, activation=self.activation, strides=1,
+                                       padding='valid', data_format="channels_last"),
+            ]
+
+        # eg coil100 without margin
+        elif self.n_pixels == 37:
+            self.tempkernels = [
+                # (batch x 1 x vec x 0 x 37-1 x H/8) -> (batch x 1 x vec x 0 x 37-3/2 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 4, 4, activation=self.activation, strides=2,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 17 x H/8) -> (batch x 1 x vec x 0 x 17-3/2 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 4, 4, activation=self.activation, strides=2,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 7 x H/8) -> (batch x 1 x vec x 0 x 7-3 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation, strides=1,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 4 x H/8) -> (batch x 1 x vec x 0 x 4-3 x H/4)
+                tf.keras.layers.Conv1D(self.hidden, 4, activation=self.activation, strides=1,
                                        padding='valid', data_format="channels_last"),
             ]
 
         # eg coil100
         elif self.n_pixels == 64:
             self.tempkernels = [
-                # (batch x 2 x vec x 1 x 64-2 x H/8) -> (batch x 2 x vec x 1 x 64-6/2=29 x H/4)
+                # (batch x 1 x vec x 0 x 64-1 x H/8) -> (batch x 1 x vec x 0 x 64-6/1=29 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 4, 5, activation=self.activation, strides=2,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 29 x H/8) -> (batch x 2 x vec x 1 x 29-3/2=13 x H/4)
+                # (batch x 1 x vec x 0 x 29 x H/8) -> (batch x 1 x vec x 0 x 29-3/1=13 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 4, 4, activation=self.activation, strides=2,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 13 x H/8) -> (batch x 2 x vec x 1 x 13-3 x H/4)
+                # (batch x 1 x vec x 0 x 13 x H/8) -> (batch x 1 x vec x 0 x 13-3 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation, strides=1,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 13-3 x H/8) -> (batch x 2 x vec x 1 x 13-6 x H/4)
+                # (batch x 1 x vec x 0 x 13-3 x H/8) -> (batch x 1 x vec x 0 x 13-6 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation, strides=1,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 13-6 x H/8) -> (batch x 2 x vec x 1 x 13-9 x H/4)
+                # (batch x 1 x vec x 0 x 13-6 x H/8) -> (batch x 1 x vec x 0 x 13-9 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation, strides=1,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 13-9 x H/8) -> (batch x 2 x vec x 1 x 13-11 x H/4)
+                # (batch x 1 x vec x 0 x 13-9 x H/8) -> (batch x 1 x vec x 0 x 13-11 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 1, 3, activation=self.activation, strides=1,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 13-11 x H/8) -> (batch x 2 x vec x 1 x 13-13 x H/4)
+                # (batch x 1 x vec x 0 x 13-11 x H/8) -> (batch x 1 x vec x 0 x 13-13 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 1, 2, activation=self.activation, strides=1,
+                                       padding='valid', data_format="channels_last"),
+            ]
+
+        # eg coil100 with margin
+        elif self.n_pixels == 91:
+            self.tempkernels = [
+                # (batch x 1 x vec x 0 x 91-1 x H/8) -> (batch x 1 x vec x 0 x 90-4/2 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 4, 5, activation=self.activation, strides=2,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 43 x H/8) -> (batch x 1 x vec x 0 x 43-3/2 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 4, 4, activation=self.activation, strides=2,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 20 x H/8) -> (batch x 1 x vec x 0 x 20-5 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 2, 6, activation=self.activation, strides=1,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 15 x H/8) -> (batch x 1 x vec x 0 x 15-5 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 2, 6, activation=self.activation, strides=1,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 10 x H/8) -> (batch x 1 x vec x 0 x 10-5 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 2, 6, activation=self.activation, strides=1,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 5 x H/8) -> (batch x 1 x vec x 0 x 5-4 x H/4)
+                tf.keras.layers.Conv1D(self.hidden, 5, activation=self.activation, strides=1,
+                                       padding='valid', data_format="channels_last"),
+            ]
+
+        # eg lfw without margin
+        elif self.n_pixels == 99:
+            self.tempkernels = [
+                # (batch x 1 x vec x 0 x 99-1 x H/8) -> (batch x 1 x vec x 0 x 98-4/2 x H/8)
+                tf.keras.layers.Conv1D(self.hidden // 4, 5, activation=self.activation, strides=2,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 47 x H/8) -> (batch x 1 x vec x 0 x 47-3/2 x H/8)
+                tf.keras.layers.Conv1D(self.hidden // 4, 4, activation=self.activation, strides=2,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 22 x H/8) -> (batch x 1 x vec x 0 x 22-2/2 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 4, 3, activation=self.activation, strides=2,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 10 x H/8) -> (batch x 1 x vec x 0 x 10-4 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 2, 5, activation=self.activation, strides=1,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 6 x H/8) -> (batch x 1 x vec x 0 x 6-3 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation, strides=1,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 3 x H/8) -> (batch x 1 x vec x 0 x 3-2 x H/4)
+                tf.keras.layers.Conv1D(self.hidden, 3, activation=self.activation, strides=1,
                                        padding='valid', data_format="channels_last"),
             ]
 
         # eg lfw
         elif self.n_pixels == 125:
             self.tempkernels = [
-                # (batch x 2 x vec x 1 x 125-2 x H/8) -> (batch x 2 x vec x 1 x 125-5/2 x H/8)
+                # (batch x 1 x vec x 0 x 125-1 x H/8) -> (batch x 1 x vec x 0 x 125-5/1 x H/8)
                 tf.keras.layers.Conv1D(self.hidden // 4, 4, activation=self.activation, strides=2,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 60 x H/8) -> (batch x 2 x vec x 1 x 60-2/2 x H/8)
+                # (batch x 1 x vec x 0 x 60 x H/8) -> (batch x 1 x vec x 0 x 60-1/1 x H/8)
                 tf.keras.layers.Conv1D(self.hidden // 4, 3, activation=self.activation, strides=2,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 29 x H/8) -> (batch x 2 x vec x 1 x 29-3/2=13 x H/4)
+                # (batch x 1 x vec x 0 x 29 x H/8) -> (batch x 1 x vec x 0 x 29-3/1=13 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 4, 4, activation=self.activation, strides=2,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 13 x H/8) -> (batch x 2 x vec x 1 x 13-3 x H/4)
+                # (batch x 1 x vec x 0 x 13 x H/8) -> (batch x 1 x vec x 0 x 13-3 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation, strides=1,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 13-3 x H/8) -> (batch x 2 x vec x 1 x 13-6 x H/4)
+                # (batch x 1 x vec x 0 x 13-3 x H/8) -> (batch x 1 x vec x 0 x 13-6 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation, strides=1,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 13-6 x H/8) -> (batch x 2 x vec x 1 x 13-9 x H/4)
+                # (batch x 1 x vec x 0 x 13-6 x H/8) -> (batch x 1 x vec x 0 x 13-9 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation, strides=1,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 13-9 x H/8) -> (batch x 2 x vec x 1 x 13-11 x H/4)
+                # (batch x 1 x vec x 0 x 13-9 x H/8) -> (batch x 1 x vec x 0 x 13-11 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 1, 3, activation=self.activation, strides=1,
                                        padding='valid', data_format="channels_last"),
-                # (batch x 2 x vec x 1 x 13-11 x H/8) -> (batch x 2 x vec x 1 x 13-13 x H/4)
+                # (batch x 1 x vec x 0 x 13-11 x H/8) -> (batch x 1 x vec x 0 x 13-13 x H/4)
                 tf.keras.layers.Conv1D(self.hidden // 1, 2, activation=self.activation, strides=1,
+                                       padding='valid', data_format="channels_last"),
+            ]
+
+        # eg lfw with margin
+        elif self.n_pixels == 177:
+            self.tempkernels = [
+                # (batch x 1 x vec x 0 x 177-1 x H/8) -> (batch x 1 x vec x 0 x 176-4/2 x H/8)
+                tf.keras.layers.Conv1D(self.hidden // 4, 5, activation=self.activation, strides=2,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 86 x H/8) -> (batch x 1 x vec x 0 x 86-4/2 x H/8)
+                tf.keras.layers.Conv1D(self.hidden // 4, 5, activation=self.activation, strides=2,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 41 x H/8) -> (batch x 1 x vec x 0 x 41-3/2 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation, strides=2,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 19 x H/8) -> (batch x 1 x vec x 0 x 19-3/2 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 2, 4, activation=self.activation, strides=2,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 8 x H/8) -> (batch x 1 x vec x 0 x 8-4 x H/4)
+                tf.keras.layers.Conv1D(self.hidden // 2, 5, activation=self.activation, strides=1,
+                                       padding='valid', data_format="channels_last"),
+                # (batch x 1 x vec x 0 x 4 x H/8) -> (batch x 1 x vec x 0 x 4-3 x H/4)
+                tf.keras.layers.Conv1D(self.hidden, 4, activation=self.activation, strides=1,
                                        padding='valid', data_format="channels_last"),
             ]
 
@@ -225,18 +387,18 @@ class BeamEncoder(tf.keras.layers.Layer):
         return dict(list(base.items()) + list(config.items()))
 
 
-class BIC(tf.keras.layers.Layer):
+class BIC(tf.keras.models.Model):
 
     def __init__(self, hidden=128, activation=tf.nn.leaky_relu, lstm_layers=3,
                  l2_regularization=0.0, edge_factor=0.5, gcn_layers=3, dropout=0.0,
-                 size_vector_field=28, pixel_count_per_vector=14,
+                 n_beams=28, pixel_count_per_beam=14,
                  context=True, **kwargs):
         super(BIC, self).__init__(**kwargs)
         self.context = context
         self.l2_regularization = l2_regularization
         self.regularizer = tf.keras.regularizers.L2(l2_regularization)
-        self.size_vector_field = size_vector_field
-        self.pixel_count_per_vector = pixel_count_per_vector
+        self.n_beams = n_beams
+        self.pixel_count_per_beam = pixel_count_per_beam
         self.hidden = hidden
         self.activation = activation
         self.edge_factor = edge_factor
@@ -253,13 +415,16 @@ class BIC(tf.keras.layers.Layer):
         self.gcn = []
         self.lstm = []
         self.mlp = []
-        self.cxt_mlp = []
+
+    def functional_compile(self, input_shape):
+        x = tf.keras.layers.Input(shape=input_shape)
+        return tf.keras.Model(inputs=[x], outputs=self.call(x))
 
     def build(self, input_shape):
-        self.beamenc = BeamEncoder(hidden=self.hidden, target_size=self.size_vector_field,
-                                   activation=self.activation, n_pixels=self.pixel_count_per_vector)
-        self.adjacency = wheel_graph_adjacency_matrix(self.size_vector_field) * self.edge_factor
-        self.extractor = toeplitz_extractor(self.size_vector_field)
+        self.beamenc = BeamEncoder(hidden=self.hidden, target_size=self.n_beams,
+                                   activation=self.activation, n_pixels=self.pixel_count_per_beam)
+        self.adjacency = wheel_graph_adjacency_matrix(self.n_beams) * self.edge_factor
+        self.extractor = toeplitz_extractor(self.n_beams)
         self.gcn = [
             GraphConvolutionLayer(self.hidden, self.adjacency, activation=self.activation,
                                   rate=self.dropout, l2=self.l2_regularization)
@@ -278,12 +443,6 @@ class BIC(tf.keras.layers.Layer):
             tf.keras.layers.Dense(2, #activation=tf.nn.tanh,
                                   kernel_initializer=self.w_init, bias_initializer=self.b_init)
         ]
-        self.cxt_mlp = [
-            tf.keras.layers.Dense(self.hidden,
-                                  kernel_initializer=self.w_init, bias_initializer=self.b_init),
-            tf.keras.layers.Dense(self.hidden, activation=self.activation,
-                                  kernel_initializer=self.w_init, bias_initializer=self.b_init)
-        ]
 
     # @tf.function
     def call(self, inputs, training=None):
@@ -297,7 +456,7 @@ class BIC(tf.keras.layers.Layer):
         batch_dim = tf.shape(inputs)[0]
         beamencoding = self.beamenc(inputs)
 
-        # encode the neighbor / spatial relationships via a GCN (batch x 2 x vec x hidden)
+        # encode the neighbor / spatial relationships via a GCN (batch x 1 x vec x hidden)
         # important to encode neighborhood, since pure black vectors might appear multiple times in an image
         # context encoder
         ctx = tf.constant(0)
@@ -309,13 +468,13 @@ class BIC(tf.keras.layers.Layer):
             beamencoding += ctx[..., :-1, :]
             ctx = ctx[..., -1, :]
 
-        # split (batch x 2 x vector x hidden) -> (batch x 1 x vector x hidden) x2
+        # split (batch x 1 x vector x hidden) -> (batch x 0 x vector x hidden) x2
         beamencoding_zero, beamencoding_theta = tf.split(beamencoding, num_or_size_splits=2, axis=1)
 
-        # reshape to (batch x 1 x vector x hidden) and (batch x vector x 1 x hidden)
-        # distance matrix | (batch x 1 x vector x hidden) - (batch x vector x 1 x hidden) | = (batch x vector x vector)
-        beamencoding_zero = tf.reshape(beamencoding_zero, [batch_dim, self.size_vector_field, self.hidden])
-        beamencoding_theta = tf.reshape(beamencoding_theta, [batch_dim, self.size_vector_field, self.hidden])
+        # reshape to (batch x 0 x vector x hidden) and (batch x vector x 0 x hidden)
+        # distance matrix | (batch x 0 x vector x hidden) - (batch x vector x 0 x hidden) | = (batch x vector x vector)
+        beamencoding_zero = tf.reshape(beamencoding_zero, [batch_dim, self.n_beams, self.hidden])
+        beamencoding_theta = tf.reshape(beamencoding_theta, [batch_dim, self.n_beams, self.hidden])
 
         # is comparing the orientation even better since this leaves the magnitude to be used for the angle decoder
         # the higher the closer the vectors
@@ -324,11 +483,11 @@ class BIC(tf.keras.layers.Layer):
         similarity = 1 / (1 + similarity)
 
         # reshape back to (batch x vector x vector)
-        prior = tf.reshape(similarity, [batch_dim, self.size_vector_field, self.size_vector_field])
+        prior = tf.reshape(similarity, [batch_dim, self.n_beams, self.n_beams])
         angle_energy = prior
 
         # Hadamard product with shifted Diagonal to extract diagonals from the masked Toeplitz Distance Matrix
-        # extractor shape (1 x vector x vector x vector)
+        # extractor shape (0 x vector x vector x vector)
         prior = prior[:, None, ...] * self.extractor[None, ...]
 
         # sum together the elements in the matrix (ie distances) (all others are zero) -> (batch x vector)
@@ -343,7 +502,7 @@ class BIC(tf.keras.layers.Layer):
         # additionally for the deployment phase, we use a second prediction task ie predicting the
         # canonicalization vector 0 (upper left corner) for reference to be able to turn a single image back
         unit_vec = beamencoding_theta + ctx[:, 1, None, :] if self.context else beamencoding_theta
-        unit_vec = tf.reshape(unit_vec, [batch_dim, self.size_vector_field, self.hidden])
+        unit_vec = tf.reshape(unit_vec, [batch_dim, self.n_beams, self.hidden])
 
         # the RNN aims to encode the positional information of the vectors (ordering)
         # which gives raise to the angle of rotation

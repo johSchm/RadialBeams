@@ -33,12 +33,22 @@ def line_overlay(lines, image, ax, title='', cmap='Greys'):
     ax.set_title(title)
 
 
-def vecs2img(lines, vec, shape, markers=False, ax=None, cmap='Greys', wandb_img=False):
-    image = np.zeros(shape)
-    for line, eval_vec in zip(lines, vec):
-        image[line[1, :, 0], line[1, :, 1]] = eval_vec[1]
-        image[line[0, :, 0], line[0, :, 1]] = eval_vec[0]
-        image[line[2, :, 0], line[2, :, 1]] = eval_vec[2]
+def beams2img(lines, beam, shape, markers=False, ax=None, cmap='Greys', wandb_img=False):
+    """
+    :param lines: beams x proximity x beam_length x (x,y)
+    :param beam: beams x proximity x beam_length x (color)
+    :param shape: width x height x (color)
+    :param markers:
+    :param ax:
+    :param cmap:
+    :param wandb_img:
+    :return:
+    """
+    image = np.zeros(shape, dtype=float)
+    for line, eval_beam in zip(lines, beam):
+        image[line[1, :, 0], line[1, :, 1]] = eval_beam[1]
+        image[line[0, :, 0], line[0, :, 1]] = eval_beam[0]
+        image[line[2, :, 0], line[2, :, 1]] = eval_beam[2]
     if markers:
         if ax is not None:
             ax.imshow(image, cmap=cmap)
@@ -55,11 +65,11 @@ def vecs2img(lines, vec, shape, markers=False, ax=None, cmap='Greys', wandb_img=
     return image
 
 
-def vec_eval(image, lines, ax, vec=None, distribution=None, title='') -> np.array:
-    # vector evaluations
-    if vec is not None:
-        image = vecs2img(lines, vec, image.shape)
-    # highlight selected vector
+def beam_eval(image, lines, ax, beam=None, distribution=None, title='') -> np.array:
+    # beam evaluations
+    if beam is not None:
+        image = beams2img(lines, beam, image.shape)
+    # highlight selected beam
     if distribution is not None:
         highlight_index = len(distribution) - 1 - np.argmax(distribution)
         for point in lines[highlight_index, 1]:
@@ -69,10 +79,10 @@ def vec_eval(image, lines, ax, vec=None, distribution=None, title='') -> np.arra
     return image
 
 
-def stacked_eval(vec, ax, title=''):
+def stacked_eval(beam, ax, title=''):
     # stacked evaluations
-    # vec (vectors x proximity x pixels x channel)
-    ax.imshow(tf.reshape(vec, [-1, tf.shape(vec)[-2], tf.shape(vec)[-1]]))
+    # beam (beams x proximity x pixels x channel)
+    ax.imshow(tf.reshape(beam, [-1, tf.shape(beam)[-2], tf.shape(beam)[-1]]))
     ax.set_title(title)
 
 
@@ -97,31 +107,31 @@ def plot_hist(angles, distribution, gt_angle, ax, title=''):
     ax.set_title(title)
 
 
-def plot_eval_vector_field(image, lines, vec, name: str):
-    """ This will plot the evaluated vectors.
-    The lines contain the positional information and the vector field the evaluations.
+def plot_eval_beams(image, lines, beam, name: str):
+    """ This will plot the evaluated beams.
+    The lines contain the positional information and the beam field the evaluations.
     """
     fig, ax = plt.subplots(2, 2, figsize=(10, 10))
     fig.suptitle(name, fontsize=16)
     plot_image(image, ax=ax[0, 0], title='Raw Image')
-    line_overlay(lines, image, ax=ax[0, 1], title='Vector Overlay')
-    vec_eval(image, lines, vec=vec, ax=ax[1, 0], title='Vector Evaluations')
-    stacked_eval(vec, ax[1, 1], title='Stacked Evaluations')
+    line_overlay(lines, image, ax=ax[0, 1], title='Beam Overlay')
+    beam_eval(image, lines, beam=beam, ax=ax[1, 0], title='Beam Evaluations')
+    stacked_eval(beam, ax[1, 1], title='Stacked Evaluations')
     plt.savefig('./data/' + name.replace(' ', '_') + '.pdf', dpi=300)
     plt.close()
 
 
-def plot_distribution(image, vec, vec_rot, distribution, lines, angles, name: str, gt_angle=None):
-    """ plot the distribution of both examples and highlight the max selected vector
+def plot_distribution(image, beam, beam_rot, distribution, lines, angles, name: str, gt_angle=None):
+    """ plot the distribution of both examples and highlight the max selected beam
     """
     fig, ax = plt.subplots(1, 3, figsize=(15, 5))
     fig.suptitle(name, fontsize=16)
-    vec_eval(image, lines, ax=ax[0], vec=vec, distribution=np.eye(len(angles))[0],
-             title='Original Vector Evaluations')
-    vec_eval(image, lines, ax=ax[1], vec=vec_rot, distribution=distribution,
-             title='Rotated Vector Evaluations')
+    beam_eval(image, lines, ax=ax[0], beam=beam, distribution=np.eye(len(angles))[0],
+             title='Original beamtor Evaluations')
+    beam_eval(image, lines, ax=ax[1], beam=beam_rot, distribution=distribution,
+             title='Rotated Beam Evaluations')
     plot_hist(angles, distribution, gt_angle, ax=ax[2], title='Original Prediction Histogram')
-    # plot_hist(angles, distribution, gt_angle, ax=ax[0, 1], title='Original Prediction Histogram')
+    # plot_hist(angles, distribution, gt_angle, ax=ax[0, 0], title='Original Prediction Histogram')
     plt.savefig('./data/' + name.replace(' ', '_') + '.pdf', dpi=300)
     plt.close()
 
@@ -133,7 +143,7 @@ def proof_of_concept(image, rot_image, distribution, lines, angles, name='', gt_
     fig, ax = plt.subplots(2, 2, figsize=(10, 10))
     fig.suptitle(name, fontsize=16)
     plot_image(image, ax=ax[0, 0], title='Ground Truth Image')
-    vec_eval(rot_image, lines, distribution=distribution, ax=ax[1, 0], title='Input Image w/ predicted C0')
+    beam_eval(rot_image, lines, distribution=distribution, ax=ax[1, 0], title='Input Image w/ predicted C0')
     plot_rot(rot_image, distribution, angles, ax=ax[0, 1])
     plot_hist(360 - angles, distribution, 360 - gt_angle, ax=ax[1, 1], title='Prediction Histogram')
     plt.savefig('./data/' + name.replace(' ', '_') + '.pdf', dpi=300)
@@ -186,7 +196,7 @@ def plot_training_performance(train_loss, val_loss,
 def heatmap(matrix, highlight_index=None, labels_left=None, labels_right=None, path=None):
     """
     :param matrix: (n x n)
-    :param highlight_index: (n x 2)
+    :param highlight_index: (n x 1)
     :return:
     """
     fig, ax = plt.subplots()
@@ -211,18 +221,18 @@ def mark_in_heatmap(ax, idxs):
                                edgecolor='green', lw=1, clip_on=False))
 
 
-def introspection_plot(image: tf.Tensor, vec: tf.Tensor, rot_vec: tf.Tensor, latents: tf.Tensor,
+def introspection_plot(image: tf.Tensor, beam: tf.Tensor, rot_beam: tf.Tensor, latents: tf.Tensor,
                        angle_energy: tf.Tensor, rnn_encoding: tf.Tensor, lines, angle, gt_angles, name=''):
     fig, ax = plt.subplots(2, 3, figsize=(10, 15))
     fig.suptitle(name, fontsize=16)
 
     gt_angles = (gt_angles / (2 * math.pi)) * 360.
 
-    vec_eval(image, lines, vec=vec, ax=ax[0, 0], title='Input Vecs (0)')
-    vec_img = vec_eval(image, lines, vec=rot_vec, ax=ax[0, 1],
-                       title='Input Vecs (1) Angle %.1f' % gt_angles[0])
+    beam_eval(image, lines, beam=beam, ax=ax[0, 0], title='Input Beams (0)')
+    beam_img = beam_eval(image, lines, beam=rot_beam, ax=ax[0, 1],
+                       title='Input Beams (0) Angle %.1f' % gt_angles[0])
 
-    ax[0, 2].imshow(tfa.image.rotate(vec_img, -angle, interpolation='bilinear'))
+    ax[0, 2].imshow(tfa.image.rotate(beam_img, -angle, interpolation='bilinear'))
     angle = (angle / (2 * math.pi)) * 360.
     ax[0, 2].set_title('Rotated by Prediction %.1f' % angle)
 
@@ -239,10 +249,10 @@ def introspection_plot(image: tf.Tensor, vec: tf.Tensor, rot_vec: tf.Tensor, lat
     # order the batch elements according to their associated angle
     order = np.argsort(gt_angles.astype(int))
     ax[1, 2].imshow(rnn_encoding[order][..., None])
-    # ax[1, 2].set_yticks(list(gt_angles.astype(int)[order]))
-    # ax[1, 2].set_yticks([0, 90, 180, 270, 360])
-    # ax[1, 2].set_ylabel('GT Angles (Batch)')
-    # ax[1, 2].set_xlabel('RNN Encoding')
+    # ax[0, 1].set_yticks(list(gt_angles.astype(int)[order]))
+    # ax[0, 1].set_yticks([0, 90, 180, 270, 360])
+    # ax[0, 1].set_ylabel('GT Angles (Batch)')
+    # ax[0, 1].set_xlabel('RNN Encoding')
     ax[1, 2].set_title('RNN Encodings')
 
     plt.savefig('./data/' + name.replace(' ', '_') + '.pdf', dpi=150)
@@ -256,7 +266,7 @@ def pca(images, latents, lines, partial=100, use_images=True, n_components=16):
     :param lines:
     :param partial:
     :param use_images: if enabled images are used, otherwise (more cost efficient)
-    indicators for the vanilla or rotated versions are used (0,1)
+    indicators for the vanilla or rotated versions are used (0,0)
     :param n_components:
     :return:
     """
@@ -287,8 +297,8 @@ def pca_tsne_latent_plot(images, latents, lines, ax=None, return_img=False,
                          width=1000, height=1000):
     """ This will plot the dimensionally reduced latent manifold.
     Points are replaced by their corresponding images.
-    :param images: (batch x 2 x width x height x channels)
-    :param latents: (batch x 2 x vector x hidden)
+    :param images: (batch x 1 x width x height x channels)
+    :param latents: (batch x 1 x Beams x hidden)
     :param path: path to save the plot
     """
     pca_feat, vis_imgs = pca(images, latents, lines, partial=partial,
