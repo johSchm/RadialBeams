@@ -5,6 +5,230 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 
 
+def create_circular_mask(height, width, center=None, radius=None):
+    if center is None:
+        center = [height // 2, width // 2]
+    if radius is None:
+        radius = min(center[0], center[1], height - center[0], width - center[1])
+
+    y, x = np.ogrid[:height, :width]
+    mask = (x - center[1]) ** 2 + (y - center[0]) ** 2 <= radius ** 2
+    return mask.astype(np.float32)
+
+
+def apply_circular_mask(image):
+
+    center = [image.shape[0] // 2, image.shape[1] // 2]
+    radius = min(center[0], center[1])
+
+    height, width, _ = image.shape
+
+    mask = create_circular_mask(height, width, center, radius)
+    mask = np.expand_dims(mask, axis=-1)
+
+    masked_image = image * mask
+
+    return tf.convert_to_tensor(masked_image, dtype=tf.float32)
+
+
+def get_endpoints(radius: int, num_points: int) -> np.ndarray:
+    k = np.arange(num_points)
+    x = radius * np.cos(2 * k * np.pi / num_points)
+    y = radius * np.sin(2 * k * np.pi / num_points)
+    return np.stack([x, y], axis=-1) + radius
+
+
+def cartesian_to_polar_grid(image_grid, image_size):
+    """ Computes the angle of each pixel vector w.r.t. the center of the image.
+    Therefore, the image_grid is assumed to be [-image_size/2, image_size/2].
+    """
+    x = image_grid[..., 0]
+    y = image_grid[..., 1]
+
+    theta = tf.atan2(y, x)
+    # theta = (theta - tf.reduce_min(theta)) / (tf.reduce_max(theta) - tf.reduce_min(theta))
+    # theta *= image_size-1
+    # print(tf.reduce_min(theta), tf.reduce_max(theta))
+
+    r = tf.sqrt(x ** 2 + y ** 2)
+    # r = (r - tf.reduce_min(r)) / (tf.reduce_max(r) - tf.reduce_min(r))
+    # r *= image_size-1
+    # print(tf.reduce_min(r), tf.reduce_max(r))
+    x = r * tf.cos(theta) + image_size / 2
+    y = r * tf.sin(theta) + image_size / 2
+
+    x = tf.clip_by_value(x, 0, image_size - 1)
+    y = tf.clip_by_value(y, 0, image_size - 1)
+
+    polar_coordinates = tf.stack([x, y], axis=-1)
+    return tf.cast(polar_coordinates, tf.int32)
+
+
+def make_grid(h, w):
+    X, Y = tf.meshgrid(tf.linspace(-1., 1., h), tf.linspace(-1., 1., w))
+    X = tf.reshape(X, (1, -1))
+    Y = tf.reshape(Y, (1, -1))
+    grid = tf.concat([X, Y], axis=0)
+    return grid
+
+
+def get_pixel_value(im, x, y):
+    b, h, w, c = im.shape
+    x, y = tf.cast(x, 'int32'), tf.cast(y, 'int32')
+    batch_idx = tf.range(0, b)[:, None, None]
+    b = tf.tile(batch_idx, (1, h, w))
+    indices = tf.stack([b, y, x], -1)
+    return tf.gather_nd(im, indices)
+
+
+def interpolate(im, x, y):
+    b, h, w, c = im.shape
+    max_y, max_x = h - 1., w - 1.
+
+    # finds neighbors
+    x = 0.5 * ((x + 1.) * max_x)
+    y = 0.5 * ((y + 1.) * max_y)
+    x0, y0 = tf.floor(x), tf.floor(y)
+    x1, y1 = x0 + 1., y0 + 1.
+    x0, y0 = tf.clip_by_value(x0, 0., max_x), tf.clip_by_value(y0, 0., max_y)
+    x1, y1 = tf.clip_by_value(x1, 0., max_x), tf.clip_by_value(y1, 0., max_y)
+
+    # get neighbor pixels
+    Ia = get_pixel_value(im, x0, y0)
+    Ib = get_pixel_value(im, x0, y1)
+    Ic = get_pixel_value(im, x1, y0)
+    Id = get_pixel_value(im, x1, y1)
+
+    # calculate distance to neighbors
+    wa = (x1 - x) * (y1 - y)
+    wb = (x1 - x) * (y - y0)
+    wc = (x - x0) * (y1 - y)
+    wd = (x - x0) * (y - y0)
+
+    # weighted sum over neighbors
+    I = wa[..., None] * Ia + wb[..., None] * Ib + wc[..., None] * Ic + wd[..., None] * Id
+    return I
+
+
+def log_polar_transform(x, radius_factor=tf.sqrt(2.)):
+    '''rho(x) ,theta(y): [-1, 1]
+    theta : [-1 * pi + pi, 1 * pi + pi] = [0, 2pi]
+    rho: [log(-1 * h/2 + h/2), log(1 * h/2 + h/2)] --> [1, logh]
+    r: exp(rho)-1 -->[0, h-1]
+    r: normalize --> r/(h-1) -->[0, 1]
+    x = e^rho * cos(theta)
+    y = e^rho & sin(theta)
+    '''
+    b, h, w, c = x.shape
+    grid = make_grid(h, w)  # (2, hw), represent log-polar coordinate system
+    grid = tf.repeat(grid[None, ...], b, axis=0)  # (b, 2, hw)
+    X, Y = grid[:, 0], grid[:, 1]
+
+    # theta
+    theta = (Y + 1) * math.pi  # [0, 2pi]
+
+    # radius
+    maxR = max(h, w) * radius_factor
+    r = tf.exp((X + 1) / 2 * tf.math.log(maxR))  # [1, h]
+    r = (r - 1) / (maxR - 1)  # [0, h]-->[0, 1]
+    r = r * (maxR / h)  # scale factorize
+
+    # map to cartesian coordinate system
+    xs = tf.reshape(r * tf.math.cos(theta), [b, h, w])
+    ys = tf.reshape(r * tf.math.sin(theta), [b, h, w])
+    output = interpolate(x, xs, ys)
+    output = tf.reshape(output, [b, h, w, c])
+    return output
+
+
+def polar_transform(x, radius_factor=tf.sqrt(2.)):
+    '''Polar coordinate transformation: (r, theta)
+    r: [0, 1]
+    theta: [0, 2pi]
+    x = r * cos(theta)
+    y = r * sin(theta)
+    '''
+    b, h, w, c = x.shape
+    grid = make_grid(h, w)  # Assuming make_grid function generates a grid
+    grid = tf.repeat(grid[None, ...], b, axis=0)  # (b, 2, hw)
+
+    # Theta
+    theta = (grid[:, 0] + 1) * math.pi  # [0, 2pi]
+
+    # Radius
+    r = grid[:, 1] * 0.5 + 0.5  # [0, 1]
+
+    # Map to Cartesian coordinate system
+    xs = tf.reshape(r * tf.math.cos(theta), [b, h, w])
+    ys = tf.reshape(r * tf.math.sin(theta), [b, h, w])
+
+    # Interpolate
+    output = interpolate(x, xs, ys)
+    output = tf.reshape(output, [b, h, w, c])
+    return output
+
+
+def inverse_log_polar_transform(x):
+    b, h, w, c = x.shape
+    grid = make_grid(h, w)  # (2, hw), represent log-polar coordinate system
+    grid = tf.repeat(grid[None, ...], b, axis=0)  # (b, 2, hw)
+    X, Y = grid[:, 0], grid[:, 1]
+
+    rs = tf.sqrt(X ** 2 + Y ** 2) / tf.sqrt(2.)
+    ts = (tf.atan2(-Y, -X)) / math.pi  # [-1., 1.]
+
+    rs = tf.reshape(rs, [b, h, w])
+    ts = tf.reshape(ts, [b, h, w])
+    output = interpolate(x, rs, ts)
+    output = tf.reshape(output, [b, h, w, c])
+    return output
+
+
+def inverse_polar_transform(polar_image):
+    '''Inverse Polar coordinate transformation: (r, theta) to Cartesian (x, y)
+    r: [0, 1]
+    theta: [0, 2pi]
+    x = r * cos(theta)
+    y = r * sin(theta)
+    '''
+    b, h, w, c = polar_image.shape
+    grid = make_grid(h, w)  # Assuming make_grid function generates a grid
+    grid = tf.repeat(grid[None, ...], b, axis=0)  # (b, 2, hw)
+
+    # Calculate Cartesian coordinates from polar coordinates
+    theta = (grid[:, 0] + 1) * math.pi  # [0, 2pi]
+    r = grid[:, 1] * 0.5 + 0.5  # [0, 1]
+
+    # Map to Cartesian coordinate system
+    xs = tf.reshape(r * tf.math.cos(theta), [b, h, w])
+    ys = tf.reshape(r * tf.math.sin(theta), [b, h, w])
+
+    # Interpolate
+    cartesian_image = interpolate(polar_image, xs, ys)
+    cartesian_image = tf.reshape(cartesian_image, [b, h, w, c])
+    return cartesian_image
+
+
+def create_circle_matrix(height, width, radius, thickness):
+    matrix = np.ones((height, width, 1))
+    y, x = np.ogrid[:height, :width]
+
+    # Equation of a circle centered at (h/2, w/2) with specified radius and thickness
+    circle_mask = ((x - width / 2) ** 2 + (y - height / 2) ** 2 <= (radius) ** 2) & \
+                  ((x - width / 2) ** 2 + (y - height / 2) ** 2 >= (radius - thickness) ** 2)
+
+    # Set the values inside the circle to 0 (black)
+    matrix[circle_mask] = 0
+
+    # Equation of a circle centered at (h/2, w/2) with specified radius and thickness
+    circle_mask = ((x - width / 2) ** 2 + (y - height / 2) ** 2 <= (radius / 2) ** 2) & \
+                  ((x - width / 2) ** 2 + (y - height / 2) ** 2 >= (radius / 2 - thickness) ** 2)
+
+    # Set the values inside the circle to 0 (black)
+    matrix[circle_mask] = 0.5
+    return matrix
+
+
 def bresenham(start, end, length=None):
     # Setup initial conditions
     x1, y1 = start
@@ -86,7 +310,8 @@ def prepare_centerable_images(images: np.array, padding=5):
 
 
 def compute_endpoints(w_dim: int, h_dim: int, beams_per_quarter=3) -> np.array:
-    """ Returns endpoints of sub-vector field as list.
+    """ TODO deprecated -> remove
+        Returns endpoints of sub-vector field as list.
         Relative to the w x h size of the images to avoid overlaps.
     """
     w_atom = w_dim / (beams_per_quarter - 1)
