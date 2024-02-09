@@ -5,6 +5,7 @@ import tensorflow as tf
 # import tensorflow_probability as tfp
 from scipy.ndimage import map_coordinates
 import numpy as np
+import tensorflow_addons as tfa
 
 
 def create_circular_mask(height, width, center=None, radius=None):
@@ -142,40 +143,68 @@ def log_polar_transform(x, radius_factor=tf.sqrt(2.)):
     output = tf.reshape(output, [b, h, w, c])
     return output
 
-def polar_transform(img, o=None, r=None, output=None, order=1, cont=0):
+
+def grid_sample(image, warp):
+    warp = warp + 0.5
+    image = tf.pad(image, ((0, 0), (1, 1), (1, 1), (0, 0)))
+    warp_shape = tf.shape(warp)
+    flat_warp = tf.reshape(warp, (warp_shape[0], -1, 2))
+    flat_sampled = tfa.image.interpolate_bilinear(image, flat_warp, indexing="xy")
+    output_shape = tf.concat((warp_shape[:-1], tf.shape(flat_sampled)[-1:]), 0)
+    return tf.reshape(flat_sampled, output_shape)
+
+
+def polar_transform(img, origin=None, radius=None, output=None):
+    """ Transformation to polar coordinates.
+    :param img: (batch x height x width x channel)
+    """
+    img_shape_tensor = tf.convert_to_tensor([img.shape[1], img.shape[2]], dtype=tf.float32)
+    if origin is None:
+        origin = img_shape_tensor / 2 - 0.5
+    if radius is None:
+        radius = tf.reduce_sum(img_shape_tensor ** 2) ** 0.5 / 2
+    if output is None:
+        output = tf.zeros([tf.cast(tf.math.round(radius), dtype=tf.int32),
+                           tf.cast(tf.math.round(radius * 2 * math.pi), dtype=tf.int32)], dtype=img.dtype)
+    elif isinstance(output, tuple):
+        output = tf.zeros(output, dtype=img.dtype)
+    out_h, out_w = output.shape
+    rs = tf.linspace(0., radius, out_h)
+    ts = tf.linspace(0., math.pi * 2, out_w)
+    grid = tf.stack([  # 2 x beam_len x n_beams
+        rs[:, None] * tf.cos(ts) + origin[1],  # x
+        rs[:, None] * tf.sin(ts) + origin[0]  # y
+    ])
+    # batch x beam_len x n_beams x 2
+    grid = tf.transpose(grid, (1, 2, 0))[None]
+    return grid_sample(img, grid)
+
+def polar_transform_batch(images, o=None, r=None, output=None, order=1, cont=0):
+    return tf.map_fn(
+        lambda image: polar_transform(image, o=o, r=r, output=output, order=order),
+        images, dtype=images.dtype)
+
+def polar_transform_inv(image, o=None, r=None, output=None, order=1, cont=0):
     # https://forum.image.sc/t/polar-transform-and-inverse-transform/40547/3
-    if o is None: o = np.array(img.shape[:2])/2 - 0.5
-    if r is None: r = (np.array(img.shape[:2])**2).sum()**0.5/2
-    if output is None:
-        shp = int(round(r)), int(round(r*2*np.pi))
-        output = np.zeros(shp, dtype=img.dtype)
-    elif isinstance(output, tuple):
-        output = np.zeros(output, dtype=img.dtype)
-    out_h, out_w = output.shape
-    out_img = np.zeros((out_h, out_w), dtype=img.dtype)
-    rs = np.linspace(0, r, out_h)
-    ts = np.linspace(0, np.pi*2, out_w)
-    xs = rs[:,None] * np.cos(ts) + o[1]
-    ys = rs[:,None] * np.sin(ts) + o[0]
-    map_coordinates(img, (ys, xs), order=order, output=output)
-    return output
-
-def polar_transform_inv(img, o=None, r=None, output=None, order=1, cont=0):
-    if r is None: r = img.shape[0]
-    if output is None:
-        output = np.zeros((r*2, r*2), dtype=img.dtype)
-    elif isinstance(output, tuple):
-        output = np.zeros(output, dtype=img.dtype)
-    if o is None: o = np.array(output.shape)/2 - 0.5
-    out_h, out_w = output.shape
-    ys, xs = np.mgrid[:out_h, :out_w] - o[:,None,None]
-    rs = (ys**2+xs**2)**0.5
-    ts = np.arccos(xs/rs)
-    ts[ys<0] = np.pi*2 - ts[ys<0]
-    ts *= (img.shape[1]-1)/(np.pi*2)
-    map_coordinates(img, (rs, ts), order=order, output=output)
-    return output
-
+    output_image = []
+    image = image.numpy()
+    for c in range(image.shape[-1]):
+        img = image[..., c]
+        if r is None: r = img.shape[0]
+        if output is None:
+            output = np.zeros((r*2, r*2), dtype=img.dtype)
+        elif isinstance(output, tuple):
+            output = np.zeros(output, dtype=img.dtype)
+        if o is None: o = np.array(output.shape)/2 - 0.5
+        out_h, out_w = output.shape
+        ys, xs = np.mgrid[:out_h, :out_w] - o[:,None,None]
+        rs = (ys**2+xs**2)**0.5
+        ts = np.arccos(xs/rs)
+        ts[ys<0] = np.pi*2 - ts[ys<0]
+        ts *= (img.shape[1]-1)/(np.pi*2)
+        map_coordinates(img, (rs, ts), order=order, output=output)
+        output_image.append(output)
+    return tf.stack(output_image, axis=-1)
 
 def inverse_log_polar_transform(x):
     b, h, w, c = x.shape
