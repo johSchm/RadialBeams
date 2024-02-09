@@ -2,7 +2,7 @@ import copy
 import numpy as np
 import math
 import tensorflow as tf
-import tensorflow_probability as tfp
+# import tensorflow_probability as tfp
 
 
 def create_circular_mask(height, width, center=None, radius=None):
@@ -455,9 +455,9 @@ def rotate_line(start: tuple, end: tuple, angle: float):
     return newx, newy
 
 
-def noise(shape: tf.TensorShape):
-    # Create a single trivariate Dirichlet, with the 3rd class being three times
-    # more frequent than the first. I.e., batch_shape=[], event_shape=[3].
-    concentration = tf.fill(shape[-1], 0.05)
-    dist = tfp.distributions.Dirichlet(concentration=concentration)
-    return dist.sample(shape[:-1])
+# def noise(shape: tf.TensorShape):
+#     # Create a single trivariate Dirichlet, with the 3rd class being three times
+#     # more frequent than the first. I.e., batch_shape=[], event_shape=[3].
+#     concentration = tf.fill(shape[-1], 0.05)
+#     dist = tfp.distributions.Dirichlet(concentration=concentration)
+#     return dist.sample(shape[:-1])
