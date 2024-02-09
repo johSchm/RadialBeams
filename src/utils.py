@@ -3,6 +3,8 @@ import numpy as np
 import math
 import tensorflow as tf
 # import tensorflow_probability as tfp
+from scipy.ndimage import map_coordinates
+import numpy as np
 
 
 def create_circular_mask(height, width, center=None, radius=None):
@@ -140,31 +142,38 @@ def log_polar_transform(x, radius_factor=tf.sqrt(2.)):
     output = tf.reshape(output, [b, h, w, c])
     return output
 
+def polar_transform(img, o=None, r=None, output=None, order=1, cont=0):
+    # https://forum.image.sc/t/polar-transform-and-inverse-transform/40547/3
+    if o is None: o = np.array(img.shape[:2])/2 - 0.5
+    if r is None: r = (np.array(img.shape[:2])**2).sum()**0.5/2
+    if output is None:
+        shp = int(round(r)), int(round(r*2*np.pi))
+        output = np.zeros(shp, dtype=img.dtype)
+    elif isinstance(output, tuple):
+        output = np.zeros(output, dtype=img.dtype)
+    out_h, out_w = output.shape
+    out_img = np.zeros((out_h, out_w), dtype=img.dtype)
+    rs = np.linspace(0, r, out_h)
+    ts = np.linspace(0, np.pi*2, out_w)
+    xs = rs[:,None] * np.cos(ts) + o[1]
+    ys = rs[:,None] * np.sin(ts) + o[0]
+    map_coordinates(img, (ys, xs), order=order, output=output)
+    return output
 
-def polar_transform(x, radius_factor=tf.sqrt(2.)):
-    '''Polar coordinate transformation: (r, theta)
-    r: [0, 1]
-    theta: [0, 2pi]
-    x = r * cos(theta)
-    y = r * sin(theta)
-    '''
-    b, h, w, c = x.shape
-    grid = make_grid(h, w)  # Assuming make_grid function generates a grid
-    grid = tf.repeat(grid[None, ...], b, axis=0)  # (b, 2, hw)
-
-    # Theta
-    theta = (grid[:, 0] + 1) * math.pi  # [0, 2pi]
-
-    # Radius
-    r = grid[:, 1] * 0.5 + 0.5  # [0, 1]
-
-    # Map to Cartesian coordinate system
-    xs = tf.reshape(r * tf.math.cos(theta), [b, h, w])
-    ys = tf.reshape(r * tf.math.sin(theta), [b, h, w])
-
-    # Interpolate
-    output = interpolate(x, xs, ys)
-    output = tf.reshape(output, [b, h, w, c])
+def polar_transform_inv(img, o=None, r=None, output=None, order=1, cont=0):
+    if r is None: r = img.shape[0]
+    if output is None:
+        output = np.zeros((r*2, r*2), dtype=img.dtype)
+    elif isinstance(output, tuple):
+        output = np.zeros(output, dtype=img.dtype)
+    if o is None: o = np.array(output.shape)/2 - 0.5
+    out_h, out_w = output.shape
+    ys, xs = np.mgrid[:out_h, :out_w] - o[:,None,None]
+    rs = (ys**2+xs**2)**0.5
+    ts = np.arccos(xs/rs)
+    ts[ys<0] = np.pi*2 - ts[ys<0]
+    ts *= (img.shape[1]-1)/(np.pi*2)
+    map_coordinates(img, (rs, ts), order=order, output=output)
     return output
 
 
@@ -182,31 +191,6 @@ def inverse_log_polar_transform(x):
     output = interpolate(x, rs, ts)
     output = tf.reshape(output, [b, h, w, c])
     return output
-
-
-def inverse_polar_transform(polar_image):
-    '''Inverse Polar coordinate transformation: (r, theta) to Cartesian (x, y)
-    r: [0, 1]
-    theta: [0, 2pi]
-    x = r * cos(theta)
-    y = r * sin(theta)
-    '''
-    b, h, w, c = polar_image.shape
-    grid = make_grid(h, w)  # Assuming make_grid function generates a grid
-    grid = tf.repeat(grid[None, ...], b, axis=0)  # (b, 2, hw)
-
-    # Calculate Cartesian coordinates from polar coordinates
-    theta = (grid[:, 0] + 1) * math.pi  # [0, 2pi]
-    r = grid[:, 1] * 0.5 + 0.5  # [0, 1]
-
-    # Map to Cartesian coordinate system
-    xs = tf.reshape(r * tf.math.cos(theta), [b, h, w])
-    ys = tf.reshape(r * tf.math.sin(theta), [b, h, w])
-
-    # Interpolate
-    cartesian_image = interpolate(polar_image, xs, ys)
-    cartesian_image = tf.reshape(cartesian_image, [b, h, w, c])
-    return cartesian_image
 
 
 def create_circle_matrix(height, width, radius, thickness):
