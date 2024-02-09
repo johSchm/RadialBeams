@@ -158,6 +158,10 @@ def polar_transform(img, origin=None, radius=None, output=None):
     """ Transformation to polar coordinates.
     :param img: (batch x height x width x channel)
     """
+    dummy_batch = False
+    if img.ndim == 3:
+        img = img[None]
+        dummy_batch = True
     img_shape_tensor = tf.convert_to_tensor([img.shape[1], img.shape[2]], dtype=tf.float32)
     if origin is None:
         origin = img_shape_tensor / 2 - 0.5
@@ -177,17 +181,11 @@ def polar_transform(img, origin=None, radius=None, output=None):
     ])
     # batch x beam_len x n_beams x 2
     grid = tf.transpose(grid, (1, 2, 0))[None]
-    return grid_sample(img, grid)
-
-def polar_transform_batch(images, o=None, r=None, output=None, order=1, cont=0):
-    return tf.map_fn(
-        lambda image: polar_transform(image, o=o, r=r, output=output, order=order),
-        images, dtype=images.dtype)
+    return grid_sample(img, grid)[0] if dummy_batch else grid_sample(img, grid)
 
 def polar_transform_inv(image, o=None, r=None, output=None, order=1, cont=0):
     # https://forum.image.sc/t/polar-transform-and-inverse-transform/40547/3
     output_image = []
-    image = image.numpy()
     for c in range(image.shape[-1]):
         img = image[..., c]
         if r is None: r = img.shape[0]
