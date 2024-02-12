@@ -204,6 +204,7 @@ def polar_transform_inv(image, o=None, r=None, output=None, order=1, cont=0):
         output_image.append(output)
     return tf.stack(output_image, axis=-1)
 
+
 def inverse_log_polar_transform(x):
     b, h, w, c = x.shape
     grid = make_grid(h, w)  # (2, hw), represent log-polar coordinate system
