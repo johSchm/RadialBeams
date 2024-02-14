@@ -1,17 +1,16 @@
 import copy
-
 import matplotlib.pyplot as plt
 import numpy as np
-import imutils
-import pandas as pd
-import seaborn as sns
-from sklearn.decomposition import PCA
+# import imutils
+# import pandas as pd
+# import seaborn as sns
+# from sklearn.decomposition import PCA
 from PIL import Image, ImageDraw
-from sklearn.manifold import TSNE
+# from sklearn.manifold import TSNE
 import tensorflow as tf
 import math
 import tensorflow_addons as tfa
-import wandb
+# import wandb
 from matplotlib.patches import Rectangle
 
 
@@ -40,7 +39,7 @@ def add_grad_coloring(image):
         image = image.numpy()
     width, height, channels = image.shape
     grad_overlay = create_gradient_image(height, width, [0,0,255], [255,0,0])
-    return (image * grad_overlay).astype(np.uint8)
+    return (image * grad_overlay) / 255.
 
 def plot_image(image, ax, title=''):
     ax.imshow(image)
