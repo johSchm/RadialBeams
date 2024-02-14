@@ -15,6 +15,33 @@ import wandb
 from matplotlib.patches import Rectangle
 
 
+def create_gradient_image(width, height, start_color, end_color):
+  """
+  Creates a two-color gradient image.
+
+  Args:
+    width: The width of the image.
+    height: The height of the image.
+    start_color: A list of 3 elements representing the starting color (RGB).
+    end_color: A list of 3 elements representing the ending color (RGB).
+
+  Returns:
+    A NumPy array representing the gradient image (width x height x 3).
+  """
+  red_gradient = np.linspace(start_color[0], end_color[0], height)
+  green_gradient = np.linspace(start_color[1], end_color[1], height)
+  blue_gradient = np.linspace(start_color[2], end_color[2], height)
+  image = np.stack([red_gradient, green_gradient, blue_gradient], axis=-1)
+  image = np.tile(image[:, None], (1, width, 1))
+  return image.astype(np.uint8)
+
+def add_grad_coloring(image):
+    if tf.is_tensor(image):
+        image = image.numpy()
+    width, height, channels = image.shape
+    grad_overlay = create_gradient_image(height, width, [0,0,255], [255,0,0])
+    return (image * grad_overlay).astype(np.uint8)
+
 def plot_image(image, ax, title=''):
     ax.imshow(image)
     if title is not None:
