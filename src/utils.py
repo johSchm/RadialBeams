@@ -20,16 +20,18 @@ def create_circular_mask(height, width, center=None, radius=None):
 
 
 def apply_circular_mask(image):
-
-    center = [image.shape[0] // 2, image.shape[1] // 2]
-    radius = min(center[0], center[1])
-
+    """
+    Args:
+        image: (height x width x channel)
+    """
     height, width, _ = image.shape
 
-    mask = create_circular_mask(height, width, center, radius)
-    mask = np.expand_dims(mask, axis=-1)
+    center = [height // 2, width // 2]
+    radius = min(center[0], center[1])
 
-    masked_image = image * mask
+    mask = create_circular_mask(height, width, center, radius)
+
+    masked_image = image * mask[..., None]
 
     return tf.convert_to_tensor(masked_image, dtype=tf.float32)
 
@@ -174,7 +176,8 @@ def polar_transform(img, origin=None, radius=None, output=None):
         output = tf.zeros(output, dtype=img.dtype)
     out_h, out_w = output.shape
     rs = tf.linspace(0., radius, out_h)
-    ts = tf.linspace(0., math.pi * 2, out_w)
+    # shift angles by 90 degree ccw to align 0 degree with positive y-axis (spatial top of image)
+    ts = tf.linspace(0., math.pi * 2, out_w) + math.pi / 2
     grid = tf.stack([  # 2 x beam_len x n_beams
         rs[:, None] * tf.cos(ts) + origin[1],  # x
         rs[:, None] * tf.sin(ts) + origin[0]  # y
@@ -185,6 +188,8 @@ def polar_transform(img, origin=None, radius=None, output=None):
 
 def polar_transform_inv(image, o=None, r=None, output=None, order=1, cont=0):
     # https://forum.image.sc/t/polar-transform-and-inverse-transform/40547/3
+    # todo: hacky hot-fix better integrate this in the grid sampling below
+    image = np.roll(image, shift=image.shape[1]//4, axis=1)
     output_image = []
     for c in range(image.shape[-1]):
         img = image[..., c]
@@ -198,12 +203,14 @@ def polar_transform_inv(image, o=None, r=None, output=None, order=1, cont=0):
         ys, xs = np.mgrid[:out_h, :out_w] - o[:,None,None]
         rs = (ys**2+xs**2)**0.5
         ts = np.arccos(xs/rs)
-        ts[ys<0] = np.pi*2 - ts[ys<0]
+        ts[ys<0] = np.pi*2 - ts[ys<0] #- np.pi / 2
         ts *= (img.shape[1]-1)/(np.pi*2)
-        map_coordinates(img, (rs, ts), order=order, output=output)
-        output_image.append(output)
-    return tf.stack(output_image, axis=-1)
-
+        output_image.append(map_coordinates(img, (rs, ts),
+                                            order=order, output=output))
+    image = tf.stack(output_image, axis=-1)
+    return image
+    # normalize over channels for valid RGB values
+    # return image / tf.reduce_sum(image, axis=-1, keepdims=True)
 
 def inverse_log_polar_transform(x):
     b, h, w, c = x.shape
