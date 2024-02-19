@@ -183,8 +183,9 @@ def polar_transform(img, origin=None, radius=None, output=None):
         rs[:, None] * tf.sin(ts) + origin[0]  # y
     ])
     # batch x beam_len x n_beams x 2
-    grid = tf.transpose(grid, (1, 2, 0))[None]
+    grid = tf.tile(tf.transpose(grid, (1, 2, 0))[None], [tf.shape(img)[0], 1, 1, 1])
     return grid_sample(img, grid)[0] if dummy_batch else grid_sample(img, grid)
+
 
 def polar_transform_inv(image, o=None, r=None, output=None, order=1, cont=0):
     # https://forum.image.sc/t/polar-transform-and-inverse-transform/40547/3
