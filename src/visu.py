@@ -12,7 +12,131 @@ import math
 import tensorflow_addons as tfa
 # import wandb
 from matplotlib.patches import Rectangle
+from src.utils import polar_transform_inv
 
+
+from matplotlib.colors import Normalize
+
+def polar_pred_plot(model, polar, normalise=False):
+    pred = model(polar).numpy()[0]
+    if normalise:
+        pred = (pred - pred.min()) / (pred.max() - pred.min())
+    pred = plt.cm.hot(pred)
+    pred = np.tile(pred[None], (10, 1, 1))[..., :3]
+    return np.concatenate([polar[0].numpy(), pred], axis=0), pred
+
+def plot_output_shift(image, model, normalise=False):
+    fig, axs = plt.subplots(2,1, figsize=(8,3))
+    img1, pred1 = polar_pred_plot(model, image, normalise=normalise)
+    img2, pred2 = polar_pred_plot(model, tf.roll(image, 50, axis=2), normalise=normalise)
+    im = axs[0].imshow(img1)
+    axs[1].imshow(img2)
+    axs[0].axis('off')
+    axs[1].axis('off')
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.hot, norm=Normalize(vmin=pred1.min(), vmax=pred1.max()))
+    plt.colorbar(sm, cax=fig.add_axes([0.87, 0.2, 0.02, 0.6]), orientation='vertical')
+    return fig
+
+def saliency_map(image, model):
+    image = tf.stack([image[0], tf.roll(image[0], 100, axis=1)], axis=0)
+    # k = tf.one_hot(tf.range(n_beams), n_beams, dtype=tf.float32)
+    # k = tf.transpose(k, (1, 0))
+    with tf.GradientTape() as tape2:
+        tape2.watch(image)
+        # diag part as [batch x n_beams] @ [n_beams x n_beams(range)] = [batch x n_beams]
+        # loss = tf.linalg.diag_part(1. - (model(image) @ k))
+        # loss = 1. - (model(image) @ get_gt_beam_energy(epoch)[:, None])
+        loss = tf.nn.softmax_cross_entropy_with_logits(logits=model(image), labels=laplace)
+        # [batch x beam_len x n_beams x channels(rgb)]
+        grad = tape2.gradient(loss, image)
+    # max-out channels -> [batch x beam_len x n_beams]
+    dgrad_max_ = np.max(tf.math.abs(grad), axis=-1)
+    arr_min, arr_max = np.min(dgrad_max_), np.max(dgrad_max_)
+    grad_eval = (dgrad_max_ - arr_min) / (arr_max - arr_min + 1e-18)
+
+    fig, axs = plt.subplots(1, 2)
+    axs[0].imshow(polar_transform_inv(image[0]), alpha=0.5)
+    axs[0].imshow(plt.cm.hot(polar_transform_inv(grad_eval[0, ..., None])[..., 0]), alpha=0.5)
+    axs[1].imshow(polar_transform_inv(image[1]), alpha=0.5)
+    axs[1].imshow(plt.cm.hot(polar_transform_inv(grad_eval[1, ..., None])[..., 0]), alpha=0.5)
+    axs[0].axis("off")
+    axs[1].axis("off")
+    return fig
+
+
+def weighted_saliency_map(image, model):
+    image = tf.stack([image[0], tf.roll(image[0], 100, axis=1)], axis=0)
+    # k = tf.one_hot(tf.range(n_beams), n_beams, dtype=tf.float32)
+    # k = tf.transpose(k, (1, 0))
+    with tf.GradientTape() as tape2:
+        tape2.watch(image)
+        # diag part as [batch x n_beams] @ [n_beams x n_beams(range)] = [batch x n_beams]
+        # loss = tf.linalg.diag_part(1. - (model(image) @ k))
+        # loss = 1. - (model(image) @ get_gt_beam_energy(epoch)[:, None])
+        loss = tf.nn.softmax_cross_entropy_with_logits(logits=model(image), labels=laplace)
+        # [batch x beam_len x n_beams x channels(rgb)]
+        grad = tape2.gradient(loss, image)
+    # max-out channels -> [batch x beam_len x n_beams]
+    dgrad_max_ = np.max(tf.math.abs(grad), axis=-1)
+    arr_min, arr_max = np.min(dgrad_max_), np.max(dgrad_max_)
+    grad_eval = (dgrad_max_ - arr_min) / (arr_max - arr_min + 1e-18)
+
+    fig, axs = plt.subplots(1, 2)
+    axs[0].imshow(polar_transform_inv(image[0]) * grad_eval[0, ..., None])
+    axs[1].imshow(polar_transform_inv(image[1] * grad_eval[1, ..., None]))
+    axs[0].axis("off")
+    axs[1].axis("off")
+    return fig
+
+
+def grad_cam(image, model):
+    image = tf.stack([image[0], tf.roll(image[0], 100, axis=1)], axis=0)
+    with tf.GradientTape() as tape3:
+        tape3.watch(image)
+        preds = model(image)
+        # class_channel = tf.gather(preds, tf.argmax(preds, axis=-1))
+        class_channel = preds[:, tf.argmax(preds[0])]
+        conv_features = model.latent_polar_map
+    grads = tape3.gradient(class_channel, conv_features)
+    # average pooling over batch and channels
+    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+    heatmap = tf.squeeze(conv_features @ pooled_grads[..., None])
+    heatmap = tf.image.resize(heatmap[..., None], (image.shape[1], image.shape[2]))
+    heatmap = tf.maximum(heatmap, 0) / tf.math.reduce_max(heatmap)
+    fig, axs = plt.subplots(1, 2)
+    axs[0].imshow(polar_transform_inv(image[0]), alpha=0.5)
+    axs[0].imshow(plt.cm.hot(polar_transform_inv(heatmap[0])[..., 0]), alpha=0.5)
+    axs[1].imshow(polar_transform_inv(image[1]), alpha=0.5)
+    axs[1].imshow(plt.cm.hot(polar_transform_inv(heatmap[1])[..., 0]), alpha=0.5)
+    axs[0].axis("off")
+    axs[1].axis("off")
+    return fig
+
+def energy_map(image, model):
+    image = tf.stack([image[0], tf.roll(image[0], 100, axis=1)], axis=0)
+    _ = model(image)
+    conv_features = model.latent_polar_map
+    conv_features = tf.reduce_max(conv_features, axis=-1)
+    conv_features = (conv_features - tf.reduce_min(conv_features)) / (
+                tf.reduce_max(conv_features) - tf.reduce_min(conv_features))
+    conv_features = tf.image.resize(conv_features[..., None], (image.shape[1], image.shape[2]))
+    fig, axs = plt.subplots(1, 2)
+    axs[0].imshow(polar_transform_inv(image[0]), alpha=0.5)
+    axs[0].imshow(plt.cm.hot(polar_transform_inv(conv_features[0])[..., 0]), alpha=0.5)
+    axs[1].imshow(polar_transform_inv(image[1]), alpha=0.5)
+    axs[1].imshow(plt.cm.hot(polar_transform_inv(conv_features[1])[..., 0]), alpha=0.5)
+    axs[0].axis("off")
+    axs[1].axis("off")
+    return fig
+
+def plot_conv_filters(filters):
+    fig, axs = plt.subplots(1, filters.shape[-1], figsize=(15, 3))
+    filters = np.array(filters).swapaxes(0, -1)
+    filters = (filters - filters.min()) / (filters.max() - filters.min())
+    for ax, filter in zip(axs, filters):
+        ax.imshow(filter)#, cmap=plt.cm.coolwarm)
+        ax.axis('off')
+    return fig
 
 def create_gradient_image(width, height, start_color, end_color):
   """
