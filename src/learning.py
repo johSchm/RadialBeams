@@ -3,6 +3,34 @@ import tensorflow as tf
 from tqdm import tqdm
 
 
+
+# def get_gt_beam_energy(epoch: int):
+#     # reason: the dot product dampens all signals (zero) apart from the target dimension
+#     sigma = 1/(epoch+1) * 100 #
+#     x = tf.range(-(n_beams // 2), n_beams // 2 + 1, dtype=tf.float32)
+#     kernel = 1 / (sigma * tf.math.sqrt(2*math.pi)) * tf.math.exp(-x**2/(2*sigma**2))
+#     kernel = kernel / tf.reduce_sum(kernel)
+#     return kernel
+
+# def dkl_gaussian(pred, stdd=1.):
+#     x = tf.range(-(n_beams // 2), n_beams // 2 + 1, dtype=tf.float32)
+#     # 1/((x \sigma \sqrt{2 \pi})
+#     kernel = 1 / (x * stdd * tf.math.sqrt(2 * math.pi))
+#     # \exp{-(\ln x-\mu)^2)/(2 \sigma^2}}
+#     kernel = kernel * tf.math.exp(-(tf.math.log(x)) / (2 * stdd ** 2))
+#     kernel = kernel / tf.reduce_sum(kernel)
+#     # \sum_{x \in \mathcal{X}} P(x) \log \left(\frac{P(x)}{Q(x)}\right)
+#     return tf.reduce_sum(tf.math.log(pred / kernel), axis=-1)
+
+def cyclic_angle_loss(complex_angle_pred):
+    complex_angle_true = tf.fill((complex_angle_pred.shape[0],), math.pi/2)
+    return ((tf.math.sin(complex_angle_true) - complex_angle_pred[:, 1]) ** 2
+            + (tf.math.cos(complex_angle_true) - complex_angle_pred[:, 0]) ** 2)
+
+def get_laplace(n_beams, scale=10):
+    x = tf.range(-(n_beams // 2), n_beams // 2 + 1, dtype=tf.float32)
+    return tf.math.exp(-tf.math.abs(x) / scale) / (2 * scale)
+
 def training(model, train_dataset, val_dataset, test_dataset, optimizer, lines, angles,
              epochs=128, name='', continuous=False, prior='off'):
 
