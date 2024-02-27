@@ -8,6 +8,26 @@ import numpy as np
 import tensorflow_addons as tfa
 
 
+def log_biases(model, log_func, step=0):
+    for layer in list(
+            model.latent_polar_encoder.layers + model.latent_radial_energy_encoder.layers + model.radial_energy_encoder.layers):
+        if isinstance(layer, tf.keras.layers.Layer) and len(layer.get_weights()) > 1:
+            log_func({layer.name: np.abs(layer.get_weights()[1]).max()}, step=step)
+
+def log_gradients(gradients, log_func, step=0):
+    for g, gradient in enumerate(gradients):
+        name = "Gradient Weight {}".format(g) if gradient.ndim > 1 else "Gradient Bias {}".format(g)
+        log_func({name: np.abs(gradient.numpy()).max()}, step=step)
+
+def roll_batch(tensor, roll_values, axis=2):
+    return tf.stack([tf.roll(tensor[i], roll_values[i], axis=axis - 1) for i in range(tensor.shape[0])])
+
+def random_roll(polar):
+    n_batch, n_beams = polar.shape[0], polar.shape[2]
+    k = tf.random.uniform(shape=(n_batch,), minval=-n_beams // 2, maxval=n_beams // 2, dtype=tf.int64)
+    polar = roll_batch(polar, k, axis=2)
+    return polar, k
+
 def create_circular_mask(height, width, center=None, radius=None):
     if center is None:
         center = [height // 2, width // 2]
