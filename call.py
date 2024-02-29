@@ -2,37 +2,36 @@ import argparse
 from datetime import datetime
 
 parser = argparse.ArgumentParser(description='BIC Training')
+parser.add_argument('--gpu',
+                    default=0, type=int, required=False,
+                    help='The GPU number.')
 parser.add_argument('--name',
-                    default=datetime.now().strftime("%m%d-%H%M"), type=str, nargs=1, required=False,
+                    default=datetime.now().strftime("%m%d-%H%M"), type=str, required=False,
                     help='Logging name for weights and biases.')
 parser.add_argument('--dataset',
-                    default='stanford_dogs', type=str, nargs=1, required=False,
+                    default='stanford_dogs', type=str, required=False,
                     choices=('stanford_dogs', ),
                     help='Training and Testing dataset.')
 parser.add_argument('--noise',
-                    default=0.1, type=float, nargs=1, required=False,
+                    default=0.1, type=float, required=False,
                     help='Gaussian Additive Noise during training [0,1].')
 parser.add_argument('--batch_size',
-                    default=200, type=int, nargs=1, required=False,
+                    default=200, type=int, required=False,
                     help='Batch Size for training and testing.')
-parser.add_argument('--dataset',
-                    default='stanford_dogs', type=str, nargs=1, required=False,
-                    choices=('stanford_dogs', ),
-                    help='Training and Testing dataset.')
 parser.add_argument('--n_filters',
-                    default=64, type=int, nargs=1, required=False,
+                    default=64, type=int, required=False,
                     help='Number of conv filters.')
 parser.add_argument('--n_epochs',
-                    default=250, type=int, nargs=1, required=False,
+                    default=250, type=int, required=False,
                     help='Number of Training epochs.')
 parser.add_argument('--learning_rate',
-                    default=5e-4, type=float, nargs=1, required=False,
+                    default=5e-4, type=float, required=False,
                     help='The learning rate for training.')
 args = parser.parse_args()
 
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 
 import math
@@ -41,14 +40,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import tensorflow as tf
-import tensorflow_datasets as tfds
-import tensorflow_addons as tfa
 
 print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
 
 from src.learning import get_laplace
-from src.utils import (polar_transform, polar_transform_inv, apply_circular_mask, roll_batch,
-                       random_roll, log_biases, log_weights, log_gradients)
+from src.utils import (log_biases, log_weights, log_gradients)
 from src.visu import (plot_conv_filters, saliency_map, weighted_saliency_map, grad_cam, energy_map,
                       plot_output_shift, process_until)
 from src.parsing import preprocess_dataset
