@@ -1,123 +1,169 @@
-import math
-import os
-
-os.environ["CUDA_VISIBLE_DEVICES"] = str(3)
-
-import tensorflow as tf
-print('TF Version: ' + str(tf.__version__))
-physical_devices = tf.config.list_physical_devices('GPU')
-print('GPUs: ' + str(physical_devices))
-if len(physical_devices) > 0:
-    tf.config.experimental.set_memory_growth(physical_devices[0], True)
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-
-from src.learning import training
-from src.model import BIC
-from src.parsing import load_dataset
-from src.parsing import preprocess
-from src.parsing import instantiate_radial_beams
 import argparse
-
-
-def run(n_iter=4*1024, batch_size=1*128, beam_set_size=8, name='', context=True, prior='off',
-        dataset_name='coil100', splits=[0.8, 0.1, 0.1], partial=None, continuous=False,
-        learning_rate=0.0001, gcn_layers=3, beam_length=64, hidden_size=128):
-
-    dataset = load_dataset(dataset_name, partial=partial)
-    img_size = dataset.element_spec['image'].shape[0]
-
-    if dataset_name == 'mnist':
-        # remove 9 from MNIST since equal 6 if rotated
-        # filter function of tf.data does not seem to work
-        images, labels, = [], []
-        for d, data in enumerate(dataset):
-            print('Filtering MNIST {0}/{1}'.format(d, dataset.cardinality() - 1), end='\r')
-            if data['label'] != 9:
-                images.append(data['image'])
-                labels.append(data['label'])
-        dataset = tf.data.Dataset.from_tensor_slices({'image': images, 'label': labels})
-
-    margin_padding = math.ceil(img_size * (math.sqrt(2) - 1))
-
-    n_train = int(splits[0] * float(dataset.cardinality()))
-    n_val = int(splits[1] * float(dataset.cardinality()))
-    n_test = int(splits[2] * float(dataset.cardinality()))
-
-    train_dataset = dataset.take(n_train)
-    val_dataset = dataset.skip(n_train).take(n_val)
-    test_dataset = dataset.skip(n_train).skip(n_val).take(n_train)
-
-    print('Target train size {0}, actual size {1}.'.format(n_train, train_dataset.cardinality()))
-    print('Target val size {0}, actual size {1}.'.format(n_val, val_dataset.cardinality()))
-    print('Target test size {0}, actual size {1}.'.format(n_test, test_dataset.cardinality()))
-
-    lines, angles = instantiate_radial_beams(img_size + margin_padding, img_size + margin_padding,
-                                             beam_set_size=beam_set_size,
-                                             max_len=beam_length)
-    train_dataset = preprocess(train_dataset, lines, angles, target_size=img_size + margin_padding,
-                               batch_size=batch_size, path='./training_dataset', continuous=continuous,
-                               padding='adaptive' if dataset_name == 'coil100' else 'default')
-    val_dataset = preprocess(val_dataset, lines, angles, target_size=img_size + margin_padding,
-                             batch_size=batch_size, path='./val_dataset', continuous=continuous,
-                             padding='adaptive' if dataset_name == 'coil100' else 'default')
-    test_dataset = preprocess(test_dataset, lines, angles, target_size=img_size + margin_padding,
-                              batch_size=batch_size, path='./test_dataset', continuous=continuous,
-                              padding='adaptive' if dataset_name == 'coil100' else 'default')
-
-    _, n_beams, _, n_pixels, n_channels = train_dataset.element_spec['beam'].shape
-
-    # model and optimizer init + training start
-    beams = tf.keras.layers.Input([2, n_beams, 3, n_pixels, n_channels], name='beams')
-    bic = BIC(hidden=hidden_size, activation=tf.nn.leaky_relu, context=context,
-              l2_regularization=0.0, edge_factor=0.5, gcn_layers=gcn_layers, dropout=0.2,
-              n_beams=n_beams, pixel_count_per_beam=n_pixels, lstm_layers=3)
-    _ = bic(inputs=beams)
-    bic.summary()
-
-    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-07)
-
-    epochs = int(tf.math.ceil(n_iter / train_dataset.cardinality()))
-    training(bic, train_dataset, val_dataset, test_dataset, optimizer, lines,
-             tf.cast(angles, tf.float32), epochs=epochs, name=name,
-             continuous=continuous, prior=prior)
+from datetime import datetime
 
 parser = argparse.ArgumentParser(description='BIC Training')
-parser.add_argument('--num_beams', type=int, nargs=1, default=16, required=False,
-                    help='Cardinality of the beam set (|B|): Keep the reflection symmetry assumption in mind, '
-                         + 'i.e., 4, 8, 16, 32 are valid values.')
-parser.add_argument('--dataset', type=str, nargs=1, default='mnist', required=False,
-                    help='The dataset identifier string: mnist, fashion_mnist, cifar10, coil100, or lfw.')
-parser.add_argument('--beam_length', type=int, nargs=1, default=14, required=False,
-                    help='The beam length. We recommend: fashion_mnist: 14, cifar10: 16, coil100: 64, lfw: 125')
-parser.add_argument('--learning_rate', type=float, nargs=1, default=0.01, required=False,
-                    help='The learning rate for the optimizer.')
-parser.add_argument('--context', type=bool, nargs=1, default=True, required=False,
-                    help='Whether or not to use the context node.')
-parser.add_argument('--continuous', type=bool, nargs=1, default=False, required=False,
-                    help='Whether or not to use continuous rotations.')
-parser.add_argument('--gcn_layers', type=int, nargs=1, default=3, required=False,
-                    help='Number of GCN layers.')
-parser.add_argument('--batch_size', type=int, nargs=1, default=128, required=False,
-                    help='The size of one batch of data for training.')
-parser.add_argument('--hidden_dims', type=int, nargs=1, default=128, required=False,
-                    help='The size of the latent space.')
-parser.add_argument('--train_steps', type=int, nargs=1, default=2048, required=False,
-                    help='The number of training steps.')
-parser.add_argument('--prior', type=str, nargs=1, default='off', required=False,
-                    help='Toeplitz prior: off, only, linear or equal.')
+parser.add_argument('--name',
+                    default=datetime.now().strftime("%m%d-%H%M"), type=str, nargs=1, required=False,
+                    help='Logging name for weights and biases.')
+parser.add_argument('--dataset',
+                    default='stanford_dogs', type=str, nargs=1, required=False,
+                    choices=('stanford_dogs', ),
+                    help='Training and Testing dataset.')
+parser.add_argument('--noise',
+                    default=0.1, type=float, nargs=1, required=False,
+                    help='Gaussian Additive Noise during training [0,1].')
+parser.add_argument('--batch_size',
+                    default=200, type=int, nargs=1, required=False,
+                    help='Batch Size for training and testing.')
+parser.add_argument('--dataset',
+                    default='stanford_dogs', type=str, nargs=1, required=False,
+                    choices=('stanford_dogs', ),
+                    help='Training and Testing dataset.')
+parser.add_argument('--n_filters',
+                    default=64, type=int, nargs=1, required=False,
+                    help='Number of conv filters.')
+parser.add_argument('--n_epochs',
+                    default=250, type=int, nargs=1, required=False,
+                    help='Number of Training epochs.')
+parser.add_argument('--learning_rate',
+                    default=5e-4, type=float, nargs=1, required=False,
+                    help='The learning rate for training.')
 args = parser.parse_args()
 
-run(n_iter=args.train_steps,
-    batch_size=args.batch_size,
-    beam_set_size=args.num_beams,
-    name=str(args.dataset) + '_' + str(args.prior) + '_' + str(args.num_beams) + '_' + str(args.continuous),
-    dataset_name=str(args.dataset),
-    splits=[0.8, 0.1, 0.1],
-    partial=None,
-    context=args.context,
-    continuous=args.continuous,
-    prior=args.prior,
-    learning_rate=args.learning_rate,
-    gcn_layers=args.gcn_layers,
-    beam_length=args.beam_length,
-    hidden_size=args.hidden_dims)
+
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
+
+import math
+import wandb
+import numpy as np
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+import tensorflow as tf
+import tensorflow_datasets as tfds
+import tensorflow_addons as tfa
+
+print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
+
+from src.learning import get_laplace
+from src.utils import (polar_transform, polar_transform_inv, apply_circular_mask, roll_batch,
+                       random_roll, log_biases, log_weights, log_gradients)
+from src.visu import (plot_conv_filters, saliency_map, weighted_saliency_map, grad_cam, energy_map,
+                      plot_output_shift, process_until)
+from src.parsing import preprocess_dataset
+from src.model import PolarRegressor
+
+
+if args.dataset == 'stanford_dogs':
+    image_size = 100
+else:
+    raise ValueError('')
+
+if args.dataset == 'stanford_dogs':
+    n_channels = 3
+else:
+    n_channels = 1
+
+# todo add args option?
+radius = image_size//2 - 5
+
+config = {
+    "dataset": args.dataset,
+    "image_size": image_size,
+    "noise_factor": args.noise,
+    "batch_size": args.batch_size,
+    "n_filters": args.n_filters,
+    "n_epochs": args.n_epochs,
+    "n_channels": n_channels,
+    "learning_rate": args.learning_rate,
+    "radius": radius,
+    "len_beam": int(round(radius)),
+    "n_beams": int(round(radius*2*math.pi))
+}
+wandb.init(project="RadialBeams", config=config, group=config['dataset'], name=args.name)
+
+# dataset loading
+train_dataset, test_dataset = preprocess_dataset(args.dataset, args.batch_size, image_size,
+                                                 config["n_beams"], config["radius"])
+print('Loaded dataset with sample shape {}.'.format(next(iter(test_dataset))['polar'].shape))
+
+# model compilation
+model = PolarRegressor(len_beam=config['len_beam'], n_beams=config['n_beams'],
+                       n_channels=config['n_channels'], n_filters=config['n_filters'])
+model.build(input_shape=(config['batch_size'], config['len_beam'], config['n_beams'], config['n_channels']))
+model(tf.zeros((config['batch_size'], config['len_beam'], config['n_beams'], config['n_channels'])))
+model.summary()
+
+# optimiser and label
+optimizer = tf.keras.optimizers.AdamW(learning_rate=config['learning_rate'])#, weight_decay=0.005)
+label = get_laplace(n_beams=config['n_beams'])
+
+# train and test
+for e in tqdm(range(config['n_epochs'])):
+
+    # training loop
+    for s, sample in enumerate(train_dataset):
+        step = e * len(train_dataset) + s
+        image = ((1 - config['noise_factor']) * sample["polar"]
+                 + config['noise_factor'] * tf.random.normal(sample["polar"].shape))
+        # image = (image / tf.reduce_min(image)) / (tf.reduce_max(image) - tf.reduce_min(image))
+
+        with tf.GradientTape() as tape:
+            k_distribution = model(image, training=True)
+            loss = tf.nn.softmax_cross_entropy_with_logits(logits=k_distribution, labels=label)
+            grad = tape.gradient(loss, model.trainable_variables)
+        # grad = [(tf.clip_by_value(g, -1., 1.)) for g in grad]
+        optimizer.apply_gradients(zip(grad, model.trainable_variables))
+        wandb.log({"training loss": np.mean(loss.numpy())}, step=step)
+
+        # logging
+        if s == 1 and e % 5 == 0:
+            log_biases(model, wandb.log, step=step)
+            log_weights(model, wandb.log, step=step)
+            log_gradients(model, grad, wandb.log, step=step)
+            # first_layer_filters = model.latent_polar_encoder.layers[0].conv_block.layers[3].get_weights()[0]
+            padded_input = model.cyclic_beam_padding(image)
+            first_layer_filters = \
+            model.get_layer('enc0').get_layer('rb0').get_layer('main').get_layer('cv1').get_weights()[0]
+            first_resid_filters = \
+            model.get_layer('enc0').get_layer('rb0').get_layer('res').get_layer('cv').get_weights()[0]
+            wandb.log({"Conv Filters (first main)": plot_conv_filters(first_layer_filters)})
+            wandb.log({"Conv Filters (first res)": plot_conv_filters(first_resid_filters)})
+            wandb.log({"Saliency Map": saliency_map(image, model, label)})
+            wandb.log({"Weighted Saliency Map": weighted_saliency_map(image, model, label)})
+            wandb.log({"GradCAM": grad_cam(image, model)})
+            wandb.log({"Energy Map": energy_map(image, model)})
+            wandb.log({"Distribution Shift": plot_output_shift(image, model, normalise=True)})
+            feature_map = process_until(model.get_layer('enc0').get_layer('rb0').get_layer('main').input,
+                                        model.get_layer('enc0').get_layer('rb0').get_layer('main').get_layer(
+                                            'cv1').output, padded_input)
+            wandb.log({"Feature Map (first main)": feature_map})
+            feature_map = process_until(model.get_layer('enc0').get_layer('rb0').get_layer('res').input,
+                                        model.get_layer('enc0').get_layer('rb0').get_layer('res').get_layer(
+                                            'cv').output, padded_input)
+            wandb.log({"Feature Map (first res)": feature_map})
+            wandb.log({"Padded Input": plt.imshow(padded_input[0])})
+            plt.close('all')
+
+        # equivariance test loop
+        # image, k = random_roll(image)
+        # test_loss = tf.abs(k + config['n_beams']//2-tf.argmax(model(image), axis=-1))
+        # wandb.log({"equivariance test": np.mean(test_loss.numpy())}, step=step)
+
+    # pseudo-equivariant test loop
+    test_resrot, test_rotres = [], []
+    for s, sample in enumerate(test_dataset):
+        test_resrot.append(tf.abs(sample['k'] + config['n_beams'] // 2
+                                  - tf.argmax(model(sample['polar_resrot']), axis=-1)).numpy())
+        test_rotres.append(tf.abs(sample['k'] + config['n_beams'] // 2
+                                  - tf.argmax(model(sample['polar_rotres']), axis=-1)).numpy())
+
+    wandb.log({"ResRot Test": np.concatenate(test_resrot, axis=0).mean()})
+    wandb.log({"RotRes Test": np.concatenate(test_rotres, axis=0).mean()})
+
+    # store model weights
+    if e % 5 == 0:
+        name = './model/{0}_{1}.tf'.format(config['dataset'], e)
+        model.save(name)
+        wandb.save(name)

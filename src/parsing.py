@@ -5,7 +5,57 @@ import numpy as np
 from src.utils import compute_endpoints
 from src.utils import instantiate_beams
 from src.utils import infer_angles_from_vectors
+from src.utils import polar_transform, apply_circular_mask
 import math
+
+
+def preprocess_dataset(name, batch_size, image_size, n_beams, radius):
+    def preprocess(example):
+        image = tf.cast(example['image'], tf.float32) / 255.
+        image = tf.image.resize(image, [image_size, image_size], antialias=True)
+        image = apply_circular_mask(image)
+        return {
+            'image': image,
+            'label': example['label'],
+            'polar': polar_transform(image, radius=radius)
+        }
+
+    def preprocess_test(example):
+        example = preprocess(example)
+        # random rotation angle
+        k = tf.random.uniform(shape=(), minval=-n_beams // 2, maxval=n_beams // 2, dtype=tf.int64)
+        angle = -tf.cast(k, tf.float32) * math.pi / (n_beams // 2)
+        # resample + rotation
+        polar_resrot = tf.roll(example['polar'], k, axis=1)
+        # rotation + resample
+        polar_rotres = tfa.image.rotate(example['image'], interpolation='bilinear', angles=angle)
+        polar_rotres = polar_transform(polar_rotres, radius=radius)
+        return {
+            'image': example['image'],
+            'label': example['label'],
+            'polar': example['polar'],
+            'polar_resrot': polar_resrot,
+            'polar_rotres': polar_rotres,
+            'k': k,
+            'angle': angle
+        }
+
+    train_dataset = tfds.load(name, split='train', shuffle_files=False)
+    test_dataset = tfds.load(name, split='test', shuffle_files=False)
+
+    # todo map after batch? and rewrite map for batched data to increase runtime performance
+    train_dataset = (train_dataset.map(preprocess, num_parallel_calls=8).cache()
+                     .batch(batch_size).prefetch(batch_size))
+    test_dataset = (test_dataset.map(preprocess_test, num_parallel_calls=8).cache()
+                    .batch(batch_size).prefetch(batch_size))
+
+    train_dataset.save('./data/{}_train'.format(name))
+    test_dataset.save('./data/{}_test'.format(name))
+
+    train_dataset = tf.data.Dataset.load('./data/{}_train'.format(name))
+    test_dataset = tf.data.Dataset.load('./data/{}_test'.format(name))
+
+    return train_dataset, test_dataset
 
 
 def load_dataset(dataset_identifier, train_portion='75%', test_portion='25%', partial=None):
