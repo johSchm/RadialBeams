@@ -71,18 +71,24 @@ class PolarRegressor(tf.keras.Model):
         self.latent_polar_encoder = models.Sequential([
             layers.InputLayer(input_shape=(len_beam, n_beams + 2 * self.padding, n_channels)),
 
-            ResNeXtBlock(n_filters=n_filters // 4, n_groups=4, l2_bias=.5, l2_weight=.5,
+            ResNeXtBlock(n_filters=n_filters // 4, n_groups=4, l2_bias=.5, #l2_weight=.5,
                          use_conv_bias=True, use_norm_bias=True, name='rb0'),
-            ResNeXtBlock(n_filters=n_filters // 2, n_groups=8, l2_bias=0.1, l2_weight=0.1,
+            ResNeXtBlock(n_filters=n_filters // 2, n_groups=8, l2_bias=0.1, #l2_weight=0.1,
                          use_conv_bias=True, use_norm_bias=True, name='rb1'),
-            ResNeXtBlock(n_filters=n_filters, n_groups=16, l2_bias=0.05, l2_weight=0.05,
+            ResNeXtBlock(n_filters=n_filters, n_groups=16, l2_bias=0.05, #l2_weight=0.05,
                          use_conv_bias=True, use_norm_bias=True, name='rb2'),
-            ResNeXtBlock(n_filters=n_filters, n_groups=16, l2_bias=0.05, l2_weight=0.05,
+            ResNeXtBlock(n_filters=n_filters, n_groups=16, l2_bias=0.05, #l2_weight=0.05,
                          use_conv_bias=True, use_norm_bias=True, name='rb3'),
-            ResNeXtBlock(n_filters=n_filters, n_groups=16, l2_bias=0.01, l2_weight=0.01,
+            ResNeXtBlock(n_filters=n_filters, n_groups=16, l2_bias=0.01, #l2_weight=0.01,
                          use_conv_bias=True, use_norm_bias=True, name='rb4'),
-            ResNeXtBlock(n_filters=n_filters, n_groups=16, l2_bias=0.01, l2_weight=0.01,
+            ResNeXtBlock(n_filters=n_filters, n_groups=16, l2_bias=0.01, #l2_weight=0.01,
                          use_conv_bias=True, use_norm_bias=True, name='rb5'),
+            # required if beam cut-off is 3 not 5
+            layers.Conv2D(n_filters, (3, 1), groups=1,
+                          padding='valid', kernel_initializer=tf.keras.initializers.HeNormal(),
+                          kernel_regularizer=tf.keras.regularizers.l2(0.01),
+                          bias_initializer='zeros', bias_regularizer=tf.keras.regularizers.l2(l2=l2_bias),
+                          use_bias=True, name="final"),
         ], name='enc0')
 
         self.latent_radial_energy = None
@@ -93,7 +99,7 @@ class PolarRegressor(tf.keras.Model):
             layers.Conv2D(n_filters, (9, 1), activation='elu', padding='valid',
                           kernel_initializer=tf.keras.initializers.HeNormal(),
                           bias_initializer='zeros', bias_regularizer=tf.keras.regularizers.l2()),
-            layers.LayerNormalization(center=False),
+            layers.LayerNormalization(center=True),
 
             layers.Conv2D(n_filters, (9, 1), activation='elu', padding='valid',
                           kernel_initializer=tf.keras.initializers.HeNormal(),
@@ -101,7 +107,7 @@ class PolarRegressor(tf.keras.Model):
             layers.Conv2D(n_filters, (9, 1), activation='elu', padding='valid',
                           kernel_initializer=tf.keras.initializers.HeNormal(),
                           bias_initializer='zeros', bias_regularizer=tf.keras.regularizers.l2()),
-            layers.LayerNormalization(center=False),
+            layers.LayerNormalization(center=True),
         ], name='enc1')
 
         # This maps the transposed energy map (batch x n_beams x len_beams) down to a radial energy over S^1
@@ -306,6 +312,17 @@ def wheel_graph_adjacency_matrix(n_vectors):
     adjacency[n_vectors - 1, n_vectors - 2] = 1
     adjacency[n_vectors - 1, 0] = 1
     return tf.cast(adjacency, tf.float32)
+
+
+def circular_graph_adjacency_matrix(n_vectors):
+    adjacency = np.zeros([n_vectors, n_vectors])
+    adjacency[0, 1] = 1
+    adjacency[0, n_vectors - 1] = 1
+    for i in range(1, n_vectors - 1):
+        adjacency[i, i-1] = 1
+    adjacency[n_vectors - 1, n_vectors - 2] = 1
+    adjacency[n_vectors - 1, 0] = 1
+    return adjacency
 
 
 def angle_matrix(n_vectors: int) -> tf.Tensor:
