@@ -12,6 +12,10 @@ parser.add_argument('--dataset',
                     default='stanford_dogs', type=str, required=False,
                     choices=('stanford_dogs', ),
                     help='Training and Testing dataset.')
+parser.add_argument('--model',
+                    default='PolarRegressor2D', type=str, required=False,
+                    choices=('PolarRegressor1D', 'PolarRegressor2D'),
+                    help='The model used during training and inference.')
 parser.add_argument('--noise',
                     default=0.1, type=float, required=False,
                     help='Gaussian Additive Noise during training [0,1].')
@@ -51,7 +55,7 @@ from src.utils import (log_biases, log_weights, log_gradients)
 from src.visu import (plot_conv_filters, saliency_map, weighted_saliency_map, grad_cam, energy_map,
                       plot_output_shift, process_until)
 from src.parsing import preprocess_dataset
-from src.model import PolarRegressor
+from src.model import PolarRegressor1D, PolarRegressor2D
 
 
 if args.dataset == 'stanford_dogs':
@@ -75,6 +79,7 @@ config = {
     "n_filters": args.n_filters,
     "n_epochs": args.n_epochs,
     "n_channels": n_channels,
+    "model": args.model,
     "learning_rate": args.learning_rate,
     "radius": radius,
     "len_beam": int(round(radius)),
@@ -91,8 +96,14 @@ else:
 print('Loaded dataset with sample shape {}.'.format(next(iter(test_dataset))['polar'].shape))
 
 # model compilation
-model = PolarRegressor(len_beam=config['len_beam'], n_beams=config['n_beams'],
-                       n_channels=config['n_channels'], n_filters=config['n_filters'])
+if args.model == 'PolarRegressor1D':
+    model = PolarRegressor1D(len_beam=config['len_beam'], n_beams=config['n_beams'],
+                             n_channels=config['n_channels'], n_filters=config['n_filters'])
+elif args.model == 'PolarRegressor2D':
+    model = PolarRegressor2D(len_beam=config['len_beam'], n_beams=config['n_beams'],
+                             n_channels=config['n_channels'], n_filters=config['n_filters'])
+else:
+    raise ValueError('Unrecognized model: {}'.format(args.model))
 model.build(input_shape=(config['batch_size'], config['len_beam'], config['n_beams'], config['n_channels']))
 model(tf.zeros((config['batch_size'], config['len_beam'], config['n_beams'], config['n_channels'])))
 model.summary()
@@ -110,8 +121,7 @@ for e in tqdm(range(config['n_epochs'])):
     for s, sample in enumerate(train_dataset):
         # +1 as wandb starts with 1
         step = e * len(train_dataset) + s
-        image = ((1 - config['noise_factor']) * sample["polar"]
-                 + config['noise_factor'] * tf.random.normal(sample["polar"].shape))
+        image = sample["polar"] + config['noise_factor'] * tf.random.normal(sample["polar"].shape)
         # image = (image / tf.reduce_min(image)) / (tf.reduce_max(image) - tf.reduce_min(image))
 
         with tf.GradientTape() as tape:
@@ -123,32 +133,32 @@ for e in tqdm(range(config['n_epochs'])):
         wandb.log({"training loss": np.mean(loss.numpy())}, step=step)
 
         # logging
-        if s == 1 and e % 5 == 0:
-            log_biases(model, wandb.log, step=step)
-            log_weights(model, wandb.log, step=step)
-            log_gradients(model, grad, wandb.log, step=step)
-            padded_input = model.cyclic_beam_padding(image)
-            first_layer_filters = \
-            model.get_layer('enc0').get_layer('rb0').get_layer('main').get_layer('cv1').get_weights()[0]
-            first_resid_filters = \
-            model.get_layer('enc0').get_layer('rb0').get_layer('res').get_layer('cv').get_weights()[0]
-            wandb.log({"Conv Filters (first main)": plot_conv_filters(first_layer_filters)}, step=step)
-            wandb.log({"Conv Filters (first res)": plot_conv_filters(first_resid_filters)}, step=step)
-            wandb.log({"Saliency Map": saliency_map(image, model, label)}, step=step)
-            wandb.log({"Weighted Saliency Map": weighted_saliency_map(image, model, label)}, step=step)
-            wandb.log({"GradCAM": grad_cam(image, model)}, step=step)
-            wandb.log({"Energy Map": energy_map(image, model)}, step=step)
-            wandb.log({"Distribution Shift": plot_output_shift(image, model, normalise=True)}, step=step)
-            feature_map = process_until(model.get_layer('enc0').get_layer('rb0').get_layer('main').input,
-                                        model.get_layer('enc0').get_layer('rb0').get_layer('main').get_layer(
-                                            'cv1').output, padded_input)
-            wandb.log({"Feature Map (first main)": feature_map}, step=step)
-            feature_map = process_until(model.get_layer('enc0').get_layer('rb0').get_layer('res').input,
-                                        model.get_layer('enc0').get_layer('rb0').get_layer('res').get_layer(
-                                            'cv').output, padded_input)
-            wandb.log({"Feature Map (first res)": feature_map}, step=step)
-            wandb.log({"Padded Input": plt.imshow(padded_input[0])}, step=step)
-            plt.close('all')
+        # if s == 1 and e % 5 == 0:
+        #     log_biases(model, wandb.log, step=step)
+        #     log_weights(model, wandb.log, step=step)
+        #     log_gradients(model, grad, wandb.log, step=step)
+        #     padded_input = model.cyclic_beam_padding(image)
+        #     first_layer_filters = \
+        #     model.get_layer('enc0').get_layer('rb0').get_layer('main').get_layer('cv1').get_weights()[0]
+        #     first_resid_filters = \
+        #     model.get_layer('enc0').get_layer('rb0').get_layer('res').get_layer('cv').get_weights()[0]
+        #     wandb.log({"Conv Filters (first main)": plot_conv_filters(first_layer_filters)}, step=step)
+        #     wandb.log({"Conv Filters (first res)": plot_conv_filters(first_resid_filters)}, step=step)
+        #     wandb.log({"Saliency Map": saliency_map(image, model, label)}, step=step)
+        #     wandb.log({"Weighted Saliency Map": weighted_saliency_map(image, model, label)}, step=step)
+        #     wandb.log({"GradCAM": grad_cam(image, model)}, step=step)
+        #     wandb.log({"Energy Map": energy_map(image, model)}, step=step)
+        #     wandb.log({"Distribution Shift": plot_output_shift(image, model, normalise=True)}, step=step)
+        #     feature_map = process_until(model.get_layer('enc0').get_layer('rb0').get_layer('main').input,
+        #                                 model.get_layer('enc0').get_layer('rb0').get_layer('main').get_layer(
+        #                                     'cv1').output, padded_input)
+        #     wandb.log({"Feature Map (first main)": feature_map}, step=step)
+        #     feature_map = process_until(model.get_layer('enc0').get_layer('rb0').get_layer('res').input,
+        #                                 model.get_layer('enc0').get_layer('rb0').get_layer('res').get_layer(
+        #                                     'cv').output, padded_input)
+        #     wandb.log({"Feature Map (first res)": feature_map}, step=step)
+        #     wandb.log({"Padded Input": plt.imshow(padded_input[0])}, step=step)
+        #     plt.close('all')
 
         # equivariance test loop
         # image, k = random_roll(image)

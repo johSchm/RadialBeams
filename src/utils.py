@@ -8,15 +8,27 @@ import numpy as np
 import tensorflow_addons as tfa
 
 
+def get_layers(model):
+    """
+    Recursively retrieves all layers from a nested model.
+    """
+    layers = []
+    for layer in model.layers:
+        if isinstance(layer, (tf.keras.models.Model, tf.keras.models.Sequential)):
+            # If the layer is a nested model, recursively get its layers
+            layers.extend(get_layers(layer))
+        elif isinstance(layer, tf.keras.layers.Layer):
+            # Otherwise, add the layer to the list
+            layers.append(layer)
+    return layers
+
 def log_biases(model, log_func, step=None):
-    for layer in list(
-            model.latent_polar_encoder.layers + model.latent_radial_energy_encoder.layers + model.radial_energy_encoder.layers):
+    for layer in get_layers(model):
         if isinstance(layer, tf.keras.layers.Layer) and len(layer.get_weights()) > 1:
             log_func({layer.name: np.abs(layer.get_weights()[1]).max()}, step=step)
 
 def log_weights(model, log_func, step=None):
-    for layer in list(
-            model.latent_polar_encoder.layers + model.latent_radial_energy_encoder.layers + model.radial_energy_encoder.layers):
+    for layer in get_layers(model):
         if isinstance(layer, tf.keras.layers.Layer) and len(layer.get_weights()) > 1:
             log_func({layer.name: np.abs(layer.get_weights()[0]).max()}, step=step)
 
