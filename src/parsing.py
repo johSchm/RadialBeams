@@ -58,8 +58,8 @@ def preprocess_dataset(name, batch_size=None, image_size=None, n_beams=None, rad
 
     else:
 
-        train_dataset = tf.data.Dataset.load('./data/{}_train'.format(name))
-        test_dataset = tf.data.Dataset.load('./data/{}_test'.format(name))
+        train_dataset = tf.data.Dataset.load('./data/{}_train'.format(name)).cache().prefetch(1000)
+        test_dataset = tf.data.Dataset.load('./data/{}_test'.format(name)).cache().prefetch(1000)
 
     return train_dataset, test_dataset
 
