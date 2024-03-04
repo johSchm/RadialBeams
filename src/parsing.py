@@ -9,7 +9,7 @@ from src.utils import polar_transform, apply_circular_mask
 import math
 
 
-def preprocess_dataset(name, batch_size, image_size, n_beams, radius):
+def preprocess_dataset(name, batch_size=None, image_size=None, n_beams=None, radius=None):
     def preprocess(example):
         image = tf.cast(example['image'], tf.float32) / 255.
         image = tf.image.resize(image, [image_size, image_size], antialias=True)
@@ -40,20 +40,26 @@ def preprocess_dataset(name, batch_size, image_size, n_beams, radius):
             'angle': angle
         }
 
-    train_dataset = tfds.load(name, split='train', shuffle_files=False)
-    test_dataset = tfds.load(name, split='test', shuffle_files=False)
+    if batch_size is not None and image_size is not None and radius is not None and n_beams is not None:
 
-    # todo map after batch? and rewrite map for batched data to increase runtime performance
-    train_dataset = (train_dataset.map(preprocess, num_parallel_calls=8).cache()
-                     .batch(batch_size).prefetch(batch_size))
-    test_dataset = (test_dataset.map(preprocess_test, num_parallel_calls=8).cache()
-                    .batch(batch_size).prefetch(batch_size))
+        train_dataset = tfds.load(name, split='train', shuffle_files=False)
+        test_dataset = tfds.load(name, split='test', shuffle_files=False)
 
-    train_dataset.save('./data/{}_train'.format(name))
-    test_dataset.save('./data/{}_test'.format(name))
+        # todo map after batch? and rewrite map for batched data to increase runtime performance
+        train_dataset = (train_dataset.map(preprocess, num_parallel_calls=8).cache()
+                         .batch(batch_size).prefetch(batch_size))
+        test_dataset = (test_dataset.map(preprocess_test, num_parallel_calls=8).cache()
+                        .batch(batch_size).prefetch(batch_size))
 
-    train_dataset = tf.data.Dataset.load('./data/{}_train'.format(name))
-    test_dataset = tf.data.Dataset.load('./data/{}_test'.format(name))
+        train_dataset.save('./data/{}_train'.format(name))
+        test_dataset.save('./data/{}_test'.format(name))
+
+        print("Datasets saved.")
+
+    else:
+
+        train_dataset = tf.data.Dataset.load('./data/{}_train'.format(name))
+        test_dataset = tf.data.Dataset.load('./data/{}_test'.format(name))
 
     return train_dataset, test_dataset
 

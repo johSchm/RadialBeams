@@ -27,6 +27,9 @@ parser.add_argument('--n_epochs',
 parser.add_argument('--learning_rate',
                     default=5e-4, type=float, required=False,
                     help='The learning rate for training.')
+parser.add_argument('--recreate_datasets',
+                    default=False, type=bool, required=False,
+                    help='This will load the base dataset and pre-process it again.')
 args = parser.parse_args()
 
 
@@ -61,8 +64,8 @@ if args.dataset == 'stanford_dogs':
 else:
     n_channels = 1
 
-# todo add args option?
-radius = image_size//2 - 5
+# todo add args option? -> note, 3 is enough but this requires altering the architecture
+radius = image_size//2 - 3
 
 config = {
     "dataset": args.dataset,
@@ -80,8 +83,11 @@ config = {
 wandb.init(project="RadialBeams", config=config, group=config['dataset'], name=args.name)
 
 # dataset loading
-train_dataset, test_dataset = preprocess_dataset(args.dataset, args.batch_size, image_size,
-                                                 config["n_beams"], config["radius"])
+if args.recreate_datasets:
+    train_dataset, test_dataset = preprocess_dataset(args.dataset, args.batch_size, image_size,
+                                                     config["n_beams"], config["radius"])
+else:
+    train_dataset, test_dataset = preprocess_dataset(args.dataset)
 print('Loaded dataset with sample shape {}.'.format(next(iter(test_dataset))['polar'].shape))
 
 # model compilation
@@ -90,6 +96,8 @@ model = PolarRegressor(len_beam=config['len_beam'], n_beams=config['n_beams'],
 model.build(input_shape=(config['batch_size'], config['len_beam'], config['n_beams'], config['n_channels']))
 model(tf.zeros((config['batch_size'], config['len_beam'], config['n_beams'], config['n_channels'])))
 model.summary()
+
+wandb.log({'Number of (learnable) Parameters': np.sum([tf.keras.backend.count_params(w) for w in model.trainable_weights])})
 
 # optimiser and label
 optimizer = tf.keras.optimizers.AdamW(learning_rate=config['learning_rate'])#, weight_decay=0.005)
@@ -100,6 +108,7 @@ for e in tqdm(range(config['n_epochs'])):
 
     # training loop
     for s, sample in enumerate(train_dataset):
+        # +1 as wandb starts with 1
         step = e * len(train_dataset) + s
         image = ((1 - config['noise_factor']) * sample["polar"]
                  + config['noise_factor'] * tf.random.normal(sample["polar"].shape))
@@ -118,28 +127,27 @@ for e in tqdm(range(config['n_epochs'])):
             log_biases(model, wandb.log, step=step)
             log_weights(model, wandb.log, step=step)
             log_gradients(model, grad, wandb.log, step=step)
-            # first_layer_filters = model.latent_polar_encoder.layers[0].conv_block.layers[3].get_weights()[0]
             padded_input = model.cyclic_beam_padding(image)
             first_layer_filters = \
             model.get_layer('enc0').get_layer('rb0').get_layer('main').get_layer('cv1').get_weights()[0]
             first_resid_filters = \
             model.get_layer('enc0').get_layer('rb0').get_layer('res').get_layer('cv').get_weights()[0]
-            wandb.log({"Conv Filters (first main)": plot_conv_filters(first_layer_filters)})
-            wandb.log({"Conv Filters (first res)": plot_conv_filters(first_resid_filters)})
-            wandb.log({"Saliency Map": saliency_map(image, model, label)})
-            wandb.log({"Weighted Saliency Map": weighted_saliency_map(image, model, label)})
-            wandb.log({"GradCAM": grad_cam(image, model)})
-            wandb.log({"Energy Map": energy_map(image, model)})
-            wandb.log({"Distribution Shift": plot_output_shift(image, model, normalise=True)})
+            wandb.log({"Conv Filters (first main)": plot_conv_filters(first_layer_filters)}, step=step)
+            wandb.log({"Conv Filters (first res)": plot_conv_filters(first_resid_filters)}, step=step)
+            wandb.log({"Saliency Map": saliency_map(image, model, label)}, step=step)
+            wandb.log({"Weighted Saliency Map": weighted_saliency_map(image, model, label)}, step=step)
+            wandb.log({"GradCAM": grad_cam(image, model)}, step=step)
+            wandb.log({"Energy Map": energy_map(image, model)}, step=step)
+            wandb.log({"Distribution Shift": plot_output_shift(image, model, normalise=True)}, step=step)
             feature_map = process_until(model.get_layer('enc0').get_layer('rb0').get_layer('main').input,
                                         model.get_layer('enc0').get_layer('rb0').get_layer('main').get_layer(
                                             'cv1').output, padded_input)
-            wandb.log({"Feature Map (first main)": feature_map})
+            wandb.log({"Feature Map (first main)": feature_map}, step=step)
             feature_map = process_until(model.get_layer('enc0').get_layer('rb0').get_layer('res').input,
                                         model.get_layer('enc0').get_layer('rb0').get_layer('res').get_layer(
                                             'cv').output, padded_input)
-            wandb.log({"Feature Map (first res)": feature_map})
-            wandb.log({"Padded Input": plt.imshow(padded_input[0])})
+            wandb.log({"Feature Map (first res)": feature_map}, step=step)
+            wandb.log({"Padded Input": plt.imshow(padded_input[0])}, step=step)
             plt.close('all')
 
         # equivariance test loop
@@ -155,8 +163,8 @@ for e in tqdm(range(config['n_epochs'])):
         test_rotres.append(tf.abs(sample['k'] + config['n_beams'] // 2
                                   - tf.argmax(model(sample['polar_rotres']), axis=-1)).numpy())
 
-    wandb.log({"ResRot Test": np.concatenate(test_resrot, axis=0).mean()})
-    wandb.log({"RotRes Test": np.concatenate(test_rotres, axis=0).mean()})
+    wandb.log({"ResRot Test": np.concatenate(test_resrot, axis=0).mean()}, step=step)
+    wandb.log({"RotRes Test": np.concatenate(test_rotres, axis=0).mean()}, step=step)
 
     # store model weights
     if e % 5 == 0:
