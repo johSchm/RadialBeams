@@ -1,5 +1,6 @@
 import tensorflow as tf
 import numpy as np
+import math
 
 from tensorflow.keras import initializers, regularizers, constraints
 from tensorflow.keras import activations
@@ -253,7 +254,18 @@ class PolarRegressor2D(tf.keras.Model):
             layers.Dense(1),
         ], name='enc2')
 
-    def call(self, x):
+    @staticmethod
+    def gaussian_smoothing(logits, size=8, sigma=1.):
+        x = tf.linspace(-1, 1, size)
+        # \frac{1}{\sigma \sqrt{2 \pi}} e^{-\frac{1}{2}\left(\frac{x-\mu}{\sigma}\right)^2}
+        kernel = (tf.cast(1 / (sigma * tf.math.sqrt(2 * math.pi)), float)
+                  * tf.cast(tf.math.exp(-0.5 * (x / sigma) ** 2), float))
+        logits = tf.concat([logits[:, logits.shape[1] - (size - 1) // 2:], logits, logits[:, :(size - 1) // 2]], axis=1)
+        # kernel: [filter_width, in_channels, out_channels]
+        logits = tf.nn.conv1d(logits[..., None], kernel[:, None, None], stride=1, padding="VALID", data_format='NWC')
+        return tf.squeeze(logits, axis=-1)
+
+    def call(self, x, ema=False):
         # compute the energy map of the input
         self.latent_polar_map = self.latent_polar_encoder(x)
         # x = tf.transpose(self.latent_polar_map, (0,2,1,3))
@@ -268,7 +280,11 @@ class PolarRegressor2D(tf.keras.Model):
         # normalise the angle vector
         # return z / tf.norm(z, axis=-1, keepdims=True)
         # log-probabilities
-        return tf.nn.log_softmax(tf.squeeze(self.radial_energy, axis=-1), axis=-1)
+        x = tf.squeeze(self.radial_energy, axis=-1)
+        x = tf.nn.log_softmax(x, axis=-1)
+        if ema:
+            x = self.gaussian_smoothing(x, size=9, sigma=1.)
+        return x
 
 
 class GroupConv2D(tf.keras.layers.Layer):
