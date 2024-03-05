@@ -112,7 +112,8 @@ model.summary()
 wandb.log({'Number of (learnable) Parameters': np.sum([tf.keras.backend.count_params(w) for w in model.trainable_weights])})
 
 # optimiser and label
-optimizer = tf.keras.optimizers.AdamW(learning_rate=config['learning_rate'])#, weight_decay=0.005)
+lr_decayed_fn = tf.keras.optimizers.schedules.CosineDecayRestarts(args.learning_rate, 1000)
+optimizer = tf.keras.optimizers.AdamW(learning_rate=lr_decayed_fn)#config['learning_rate'])#, weight_decay=0.005)
 label = get_laplace(n_beams=config['n_beams'])
 
 # train and test
@@ -132,6 +133,7 @@ for e in tqdm(range(config['n_epochs'])):
         # grad = [(tf.clip_by_value(g, -1., 1.)) for g in grad]
         optimizer.apply_gradients(zip(grad, model.trainable_variables))
         wandb.log({"training loss": np.mean(loss.numpy())}, step=step)
+        wandb.log({"learning rate": optimizer.lr.numpy()}, step=step)
 
         # logging
         # if s == 1 and e % 5 == 0:
