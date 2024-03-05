@@ -53,7 +53,7 @@ print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
 from src.learning import get_laplace
 from src.utils import (log_biases, log_weights, log_gradients)
 from src.visu import (plot_conv_filters, saliency_map, weighted_saliency_map, grad_cam, energy_map,
-                      plot_output_shift, process_until)
+                      plot_output_shift, process_until, plot_pred_polar_grid)
 from src.parsing import preprocess_dataset
 from src.model import PolarRegressor1D, PolarRegressor2D
 
@@ -133,10 +133,11 @@ for e in tqdm(range(config['n_epochs'])):
         # grad = [(tf.clip_by_value(g, -1., 1.)) for g in grad]
         optimizer.apply_gradients(zip(grad, model.trainable_variables))
         wandb.log({"training loss": np.mean(loss.numpy())}, step=step)
-        wandb.log({"learning rate": optimizer.lr.numpy()}, step=step)
+        wandb.log({"learning rate": lr_decayed_fn(step).numpy()}, step=step)
 
         # logging
-        # if s == 1 and e % 5 == 0:
+        if s == 1 and e % 5 == 0:
+            wandb.log({"Test Samples": plot_pred_polar_grid(model, sample, n_samples=4)})
         #     log_biases(model, wandb.log, step=step)
         #     log_weights(model, wandb.log, step=step)
         #     log_gradients(model, grad, wandb.log, step=step)
@@ -172,9 +173,9 @@ for e in tqdm(range(config['n_epochs'])):
     test_resrot, test_rotres = [], []
     for s, sample in enumerate(test_dataset):
         test_resrot.append(tf.abs(sample['k'] + config['n_beams'] // 2
-                                  - tf.argmax(model(sample['polar_resrot']), axis=-1)).numpy())
+                                  - tf.argmax(model(sample['polar_resrot'], training=False, ema=True), axis=-1)).numpy())
         test_rotres.append(tf.abs(sample['k'] + config['n_beams'] // 2
-                                  - tf.argmax(model(sample['polar_rotres']), axis=-1)).numpy())
+                                  - tf.argmax(model(sample['polar_rotres'], training=False, ema=True), axis=-1)).numpy())
 
     wandb.log({"ResRot Test": np.concatenate(test_resrot, axis=0).mean()}, step=step)
     wandb.log({"RotRes Test": np.concatenate(test_rotres, axis=0).mean()}, step=step)
