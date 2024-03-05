@@ -35,7 +35,7 @@ parser.add_argument('--recreate_datasets',
                     default=False, type=bool, required=False,
                     help='This will load the base dataset and pre-process it again.')
 args = parser.parse_args()
-
+print(args)
 
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
@@ -88,6 +88,7 @@ config = {
 wandb.init(project="RadialBeams", config=config, group=config['dataset'], name=args.name)
 
 # dataset loading
+# todo add notification if batch_size does not match loaded batch size
 if args.recreate_datasets:
     train_dataset, test_dataset = preprocess_dataset(args.dataset, args.batch_size, image_size,
                                                      config["n_beams"], config["radius"])
