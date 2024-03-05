@@ -15,6 +15,71 @@ from matplotlib.patches import Rectangle
 from src.utils import polar_transform_inv
 from matplotlib.colors import Normalize
 
+
+def plot_in_polar_coors(image, ax=None):
+    # Convert RGB image to grayscale
+    grayscale_image = np.dot(image[..., :3], [0.2989, 0.5870, 0.1140])
+
+    # Define polar coordinates
+    theta = np.linspace(0, 2 * np.pi, grayscale_image.shape[1])
+    r = np.linspace(0, 1, grayscale_image.shape[0])
+    Theta, R = np.meshgrid(theta, r)
+
+    # Map grayscale intensity to color
+    norm = Normalize(vmin=0, vmax=255)  # Assuming 8-bit grayscale (0-255)
+    colors = plt.cm.gray(norm(grayscale_image))
+
+    # Create the polar plot
+    if ax is None:
+        fig, ax = plt.subplots(subplot_kw={'projection': 'polar'})
+    ax.pcolormesh(Theta, R, grayscale_image, shading='auto', cmap='gray')
+
+    # Customize the plot (add labels, title, etc.)
+    ax.set_rticks([])  # Hide radial ticks for cleaner appearance
+    ax.set_theta_offset(-np.pi / 2)
+    return ax
+
+
+def polar_energy_plot(energies, polar_image, ax=None, bottom=1, max_height=1):
+    N = energies.shape[0]
+    energies = (energies - np.min(energies)) / (np.max(energies) - np.min(energies))
+    theta = np.linspace(0, 2 * np.pi, N, endpoint=False)
+    width = (2 * np.pi) / N
+
+    if ax is None:
+        ax = plt.subplot(111, polar=True)
+
+    plot_in_polar_coors(polar_image, ax=ax)
+    bars = ax.bar(theta, energies, width=width, bottom=bottom)
+
+    # Use custom colors and opacity
+    for e, bar in zip(energies, bars):
+        bar.set_facecolor(plt.cm.Blues(e))
+        bar.set_alpha(0.8)
+
+    # ax.set_theta_zero_location('N') # set zero to north
+    ax.axis("off")
+    return ax
+
+
+def plot_pred_polar_grid(model, sample, n_samples=4):
+    fig, axs = plt.subplots(3, n_samples, subplot_kw={'projection': 'polar'}, figsize=(n_samples * 2, 5))
+    for k, key in enumerate(['polar', 'polar_resrot', 'polar_rotres']):
+        polar_images = sample[key][:n_samples]
+        preds = model(polar_images)[:n_samples]
+        for i, (image, pred) in enumerate(zip(polar_images, preds)):
+            polar_energy_plot(pred, image, ax=axs[k, i])
+            # if key == 'polar':
+            #     axs[k, i].vlines(0., 1., 2., colors='orange', zorder=100)
+            # else:
+            #     axs[k, i].vlines(sample['angle'][i], 1., 2., colors='orange', zorder=100)
+
+    axs[0, 0].annotate('Original', (4.8, 3), fontsize=6, va='center', annotation_clip=False, rotation=90)
+    axs[1, 0].annotate('Resampling + Rotation', (4.8, 3), fontsize=6, va='center', annotation_clip=False, rotation=90)
+    axs[2, 0].annotate('Rotation + Resampling', (4.8, 3), fontsize=6, va='center', annotation_clip=False, rotation=90)
+    return fig
+
+
 def polar_pred_plot(model, polar, normalise=False):
     pred = np.exp(model(polar).numpy()[0])
     if normalise:
