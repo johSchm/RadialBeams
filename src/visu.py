@@ -36,7 +36,6 @@ def plot_in_polar_coors(image, ax=None):
 
     # Customize the plot (add labels, title, etc.)
     ax.set_rticks([])  # Hide radial ticks for cleaner appearance
-    ax.set_theta_offset(-np.pi / 2)
     return ax
 
 
@@ -57,27 +56,37 @@ def polar_energy_plot(energies, polar_image, ax=None, bottom=1, max_height=1):
         bar.set_facecolor(plt.cm.Blues(e))
         bar.set_alpha(0.8)
 
+    # this is the offset added by the polar transform function (0. degree at [0,1])
+    ax.set_theta_offset(-np.pi / 2)
+
     # ax.set_theta_zero_location('N') # set zero to north
     ax.axis("off")
     return ax
 
 
 def plot_pred_polar_grid(model, sample, n_samples=4):
+    plt.ioff()
     fig, axs = plt.subplots(3, n_samples, subplot_kw={'projection': 'polar'}, figsize=(n_samples * 2, 5))
     for k, key in enumerate(['polar', 'polar_resrot', 'polar_rotres']):
         polar_images = sample[key][:n_samples]
-        preds = model(polar_images)[:n_samples]
+        n_beams = polar_images[0].shape[1]
+        preds = model(polar_images, training=False, ema=True)[:n_samples]
+        pred_angle = (tf.cast(tf.argmax(preds, axis=-1) - n_beams // 2, float) * 2 * math.pi) / n_beams
         for i, (image, pred) in enumerate(zip(polar_images, preds)):
             polar_energy_plot(pred, image, ax=axs[k, i])
-            # if key == 'polar':
-            #     axs[k, i].vlines(0., 1., 2., colors='orange', zorder=100)
-            # else:
-            #     axs[k, i].vlines(sample['angle'][i], 1., 2., colors='orange', zorder=100)
+            if key == 'polar':
+                axs[k, i].vlines(math.pi, 1., 2., colors='orange', zorder=100, linestyles='dotted')
+            else:
+                axs[k, i].vlines(-sample['angle'][i] + math.pi, 1., 2., colors='orange', zorder=100,
+                                 linestyles='dotted')
+            axs[k, i].vlines(pred_angle[i] + math.pi, 1., 2., colors='orange', zorder=100, linestyles='solid')
 
     axs[0, 0].annotate('Original', (4.8, 3), fontsize=6, va='center', annotation_clip=False, rotation=90)
     axs[1, 0].annotate('Resampling + Rotation', (4.8, 3), fontsize=6, va='center', annotation_clip=False, rotation=90)
     axs[2, 0].annotate('Rotation + Resampling', (4.8, 3), fontsize=6, va='center', annotation_clip=False, rotation=90)
-    return fig
+
+    plt.savefig('test_samples.png')
+    # return Image.open('test_samples.pdf')
 
 
 def polar_pred_plot(model, polar, normalise=False):
