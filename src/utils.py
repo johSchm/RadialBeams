@@ -1,12 +1,21 @@
 import copy
-import numpy as np
 import math
 import tensorflow as tf
-# import tensorflow_probability as tfp
 from scipy.ndimage import map_coordinates
 import numpy as np
 import tensorflow_addons as tfa
+import receptive_field as rf
 
+
+def compute_receptive_field(model, input_shape):
+    g = tf.Graph()
+    with g.as_default():
+        model.build(input_shape=input_shape)
+
+    rf_x, rf_y, eff_stride_x, eff_stride_y, eff_pad_x, eff_pad_y = \
+        rf.compute_receptive_field_from_graph_def(g.as_graph_def(), 'input_image', 'my_output_endpoint')
+
+    return rf_x, rf_y, eff_stride_x, eff_stride_y, eff_pad_x, eff_pad_y
 
 def get_layers(model):
     """
@@ -449,6 +458,15 @@ def infer_angles_from_vectors(endpoints: np.array, center: np.array) -> list:
         # print(relative_angle)
         angles.append(angles[-1] + relative_angle)
     return angles
+
+
+def angle_diff(true_angle, pred_k, n_beams):
+    pred_k = pred_k - n_beams // 2
+    pred_angle = -(tf.cast(pred_k, float) * 2 * math.pi) / n_beams
+    ang1 = tf.math.atan2(tf.math.cos(true_angle), tf.math.sin(true_angle))
+    ang2 = tf.math.atan2(tf.math.cos(pred_angle), tf.math.sin(pred_angle))
+    angle = tf.math.abs(ang1 - ang2) % (2 * math.pi)
+    return (angle / math.pi) * 180.
 
 
 def angle_between(p1, p2, degree=False, gpu=False):

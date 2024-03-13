@@ -34,6 +34,12 @@ parser.add_argument('--learning_rate',
 parser.add_argument('--recreate_datasets',
                     default=False, type=bool, required=False,
                     help='This will load the base dataset and pre-process it again.')
+parser.add_argument('--weight_decay',
+                    default=0.2, type=float, required=False,
+                    help='Global weight decay rate.')
+parser.add_argument('--first_decay_rate',
+                    default=1000, type=float, required=False,
+                    help='First decay rate using during learning rate scheduling.')
 args = parser.parse_args()
 print(args)
 
@@ -51,7 +57,7 @@ import tensorflow as tf
 print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
 
 from src.learning import get_laplace
-from src.utils import (log_biases, log_weights, log_gradients)
+from src.utils import (log_biases, log_weights, log_gradients, angle_diff)
 from src.visu import (plot_conv_filters, saliency_map, weighted_saliency_map, grad_cam, energy_map,
                       plot_output_shift, process_until, plot_pred_polar_grid)
 from src.parsing import preprocess_dataset
@@ -81,10 +87,27 @@ config = {
     "n_channels": n_channels,
     "model": args.model,
     "learning_rate": args.learning_rate,
+    "first_decay_rate": args.first_decay_rate,
+    "weight_decay": args.weight_decay,
     "radius": radius,
     "len_beam": int(round(radius)),
-    "n_beams": int(round(radius*2*math.pi))
+    "n_beams": int(round(radius*2*math.pi)),
+    "receptive_field": 0
 }
+
+# from src.utils import get_layers
+# # best_model = wandb.restore('./model/{0}_0.tf'.format(config['dataset']), run_path="johschm/RadialBeams/jpnmfy64")
+# best_model = tf.keras.models.load_model('/project/johannsc/symmetries/RadialBeams/./model/stanford_dogs_0.tf')
+# for layer in get_layers(best_model):
+#     try:
+#         print(layer.name, layer.kernel_size, layer.dilation_rate)
+#     except AttributeError:
+#         pass
+#     finally:
+#         print(layer.name)
+# # print(get_layers(best_model))
+# raise ValueError
+
 wandb.init(project="RadialBeams", config=config, group=config['dataset'], name=args.name)
 
 # dataset loading
@@ -106,20 +129,24 @@ elif args.model == 'PolarRegressor2D':
 else:
     raise ValueError('Unrecognized model: {}'.format(args.model))
 model.build(input_shape=(config['batch_size'], config['len_beam'], config['n_beams'], config['n_channels']))
-model(tf.zeros((config['batch_size'], config['len_beam'], config['n_beams'], config['n_channels'])))
+# model(tf.zeros((config['batch_size'], config['len_beam'], config['n_beams'], config['n_channels'])))
 model.summary()
 
 wandb.log({'Number of (learnable) Parameters': np.sum([tf.keras.backend.count_params(w) for w in model.trainable_weights])})
+wandb.log({'Receptive Field Size': model.receptive_field})
+# wandb.config["receptive_field"] = model.receptive_field # requires allow_val_change=True in config.update()
+# print(wandb.config)
 
 # optimiser and label
-lr_decayed_fn = tf.keras.optimizers.schedules.CosineDecayRestarts(args.learning_rate, 1000)
-optimizer = tf.keras.optimizers.AdamW(learning_rate=lr_decayed_fn)#config['learning_rate'])#, weight_decay=0.005)
+lr_decayed_fn = tf.keras.optimizers.schedules.CosineDecayRestarts(args.learning_rate, config['first_decay_rate'])
+optimizer = tf.keras.optimizers.AdamW(learning_rate=lr_decayed_fn, weight_decay=config['weight_decay'])
 label = get_laplace(n_beams=config['n_beams'])
 
 # train and test
 for e in tqdm(range(config['n_epochs'])):
 
     # training loop
+    training_err = []
     for s, sample in enumerate(train_dataset):
         # +1 as wandb starts with 1
         step = e * len(train_dataset) + s
@@ -127,17 +154,18 @@ for e in tqdm(range(config['n_epochs'])):
         # image = (image / tf.reduce_min(image)) / (tf.reduce_max(image) - tf.reduce_min(image))
 
         with tf.GradientTape() as tape:
-            k_distribution = model(image, training=True)
+            k_distribution = model(image, training=True, ema=True)
             loss = tf.nn.softmax_cross_entropy_with_logits(logits=k_distribution, labels=label)
             grad = tape.gradient(loss, model.trainable_variables)
-        # grad = [(tf.clip_by_value(g, -1., 1.)) for g in grad]
+        # grad = [(tf.clip_by_value(g, -1., 1.)) for g in grad]ddd
         optimizer.apply_gradients(zip(grad, model.trainable_variables))
         wandb.log({"training loss": np.mean(loss.numpy())}, step=step)
         wandb.log({"learning rate": lr_decayed_fn(step).numpy()}, step=step)
 
+        pred_k = tf.argmax(k_distribution, axis=-1)
+        training_err.append(angle_diff(tf.zeros_like(pred_k, dtype=float), pred_k, config['n_beams']).numpy())
         # logging
-        if s == 1 and e % 5 == 0:
-            wandb.log({"Test Samples": plot_pred_polar_grid(model, sample, n_samples=4)})
+        # if s == 1 and e % 5 == 0:
         #     log_biases(model, wandb.log, step=step)
         #     log_weights(model, wandb.log, step=step)
         #     log_gradients(model, grad, wandb.log, step=step)
@@ -169,19 +197,25 @@ for e in tqdm(range(config['n_epochs'])):
         # test_loss = tf.abs(k + config['n_beams']//2-tf.argmax(model(image), axis=-1))
         # wandb.log({"equivariance test": np.mean(test_loss.numpy())}, step=step)
 
+    wandb.log({"Training Error": np.concatenate(training_err, axis=0).mean()}, step=step)
+
     # pseudo-equivariant test loop
     test_resrot, test_rotres = [], []
     for s, sample in enumerate(test_dataset):
-        test_resrot.append(tf.abs(sample['k'] + config['n_beams'] // 2
-                                  - tf.argmax(model(sample['polar_resrot'], training=False, ema=True), axis=-1)).numpy())
-        test_rotres.append(tf.abs(sample['k'] + config['n_beams'] // 2
-                                  - tf.argmax(model(sample['polar_rotres'], training=False, ema=True), axis=-1)).numpy())
+        pred_k = tf.argmax(model(sample['polar_resrot'], training=False, ema=True), axis=-1)
+        test_resrot.append(angle_diff(sample['angle'], pred_k, config['n_beams']).numpy())
+        # pred_k = tf.argmax(model(sample['polar_rotres'], training=False, ema=True), axis=-1)
+        # test_rotres.append(angle_diff(sample['angle'], pred_k, config['n_beams']).numpy())
 
+    # if e % 10 == 0:
+    #     plot_pred_polar_grid(model, sample, n_samples=4)
+    # wandb.log({"Test Samples": wandb.Image('test_samples.png')}, step=step)
     wandb.log({"ResRot Test": np.concatenate(test_resrot, axis=0).mean()}, step=step)
-    wandb.log({"RotRes Test": np.concatenate(test_rotres, axis=0).mean()}, step=step)
+    # wandb.log({"RotRes Test": np.concatenate(test_rotres, axis=0).mean()}, step=step)
+    plt.close('all')
 
     # store model weights
-    if e % 5 == 0:
-        name = './model/{0}_{1}.tf'.format(config['dataset'], e)
-        model.save(name)
-        wandb.save(name)
+    # if e % 10 == 0:
+    #     name = './model/{0}_{1}.tf'.format(config['dataset'], e)
+    #     model.save(name)
+    #     wandb.save(name)

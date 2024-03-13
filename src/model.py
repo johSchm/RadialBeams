@@ -129,7 +129,7 @@ class CircularPadding(layers.Layer):
 
 class ResNeXtBlock(tf.keras.Model):
     def __init__(self, n_filters: int, n_groups: int, l2_bias=None, l2_weight=None, kernel_size=(3, 5),
-                 use_conv_bias=True, use_norm_bias=True, name=None):
+                 dilation=2, use_conv_bias=True, use_norm_bias=True, name=None):
         super(ResNeXtBlock, self).__init__(name=name)
 
         l2_bias = l2_bias if l2_bias is not None else 0.
@@ -143,15 +143,18 @@ class ResNeXtBlock(tf.keras.Model):
                           use_bias=use_conv_bias, name="cv0"),
             layers.ELU(),
             layers.LayerNormalization(center=use_norm_bias, name="ln0"),
+            layers.Dropout(0.1),
 
-            CircularPadding((kernel_size[1] - 1) // 2),
+            CircularPadding(((kernel_size[1] - 1) * dilation) // 2),
             layers.Conv2D(n_filters, kernel_size, groups=n_groups,
+                          dilation_rate=(1, dilation),
                           padding='valid', kernel_initializer=tf.keras.initializers.HeNormal(),
                           kernel_regularizer=tf.keras.regularizers.l2(l2_weight),
                           bias_initializer='zeros', bias_regularizer=tf.keras.regularizers.l2(l2=l2_bias),
                           use_bias=use_conv_bias, name="cv1"),
             layers.ELU(),
             layers.LayerNormalization(center=use_norm_bias, name="ln1"),
+            layers.Dropout(0.1),
 
             layers.Conv2D(n_filters, (1, 1), groups=1,
                           padding='valid', kernel_initializer=tf.keras.initializers.HeNormal(),
@@ -160,15 +163,16 @@ class ResNeXtBlock(tf.keras.Model):
                           use_bias=use_conv_bias, name="cv2"),
             layers.ELU(),
             layers.LayerNormalization(center=use_norm_bias, name="ln2"),
+            layers.Dropout(0.1),
         ], name='main')
         self.residual_block = models.Sequential([
-            CircularPadding((kernel_size[1] - 1) // 2),
-            layers.Conv2D(n_filters, kernel_size, groups=1,
+            layers.Conv2D(n_filters, (kernel_size[0], 1), groups=1,
                           padding='valid', kernel_initializer=tf.keras.initializers.HeNormal(),
                           kernel_regularizer=tf.keras.regularizers.l2(l2_weight),
                           bias_initializer='zeros', bias_regularizer=tf.keras.regularizers.l2(l2=l2_bias),
-                          use_bias=use_conv_bias, name="cv"),
-            layers.LayerNormalization(center=use_norm_bias, name="ln")
+                          use_bias=use_conv_bias, name="cv2"),
+            layers.LayerNormalization(center=use_norm_bias, name="ln"),
+            layers.Dropout(0.1),
         ], name='res')
 
     def call(self, inputs, training=None, **kwargs):
@@ -189,60 +193,70 @@ class PolarRegressor2D(tf.keras.Model):
         self.latent_polar_encoder = models.Sequential([
             layers.InputLayer(input_shape=(len_beam, n_beams, n_channels)),
 
-            ResNeXtBlock(n_filters=n_filters // 4, n_groups=4, l2_bias=.5, #l2_weight=.5,
+            ResNeXtBlock(n_filters=n_filters // 4, n_groups=2, l2_bias=.0, #l2_weight=.5,
+                         kernel_size=(3,3), dilation=1,
                          use_conv_bias=True, use_norm_bias=True, name='rb0'),
-            ResNeXtBlock(n_filters=n_filters // 2, n_groups=8, l2_bias=0.1, #l2_weight=0.1,
+            ResNeXtBlock(n_filters=n_filters // 2, n_groups=4, l2_bias=0., #l2_weight=0.1,
+                         kernel_size=(3,3), dilation=1,
                          use_conv_bias=True, use_norm_bias=True, name='rb1'),
-            ResNeXtBlock(n_filters=n_filters, n_groups=16, l2_bias=0.05, #l2_weight=0.05,
+            ResNeXtBlock(n_filters=n_filters, n_groups=8, l2_bias=.0, #l2_weight=0.05,
+                         kernel_size=(3,7), dilation=2,
                          use_conv_bias=True, use_norm_bias=True, name='rb2'),
-            ResNeXtBlock(n_filters=n_filters, n_groups=16, l2_bias=0.05, #l2_weight=0.05,
+            ResNeXtBlock(n_filters=n_filters, n_groups=8, l2_bias=.0, #l2_weight=0.05,
+                         kernel_size=(3,7), dilation=3,
                          use_conv_bias=True, use_norm_bias=True, name='rb3'),
-            ResNeXtBlock(n_filters=n_filters, n_groups=16, l2_bias=0.01, #l2_weight=0.01,
+            ResNeXtBlock(n_filters=n_filters, n_groups=8, l2_bias=.0, #l2_weight=0.01,
+                         kernel_size=(3,7), dilation=4,
                          use_conv_bias=True, use_norm_bias=True, name='rb4'),
-            ResNeXtBlock(n_filters=n_filters, n_groups=16, l2_bias=0.01, #l2_weight=0.01,
+            ResNeXtBlock(n_filters=n_filters, n_groups=8, l2_bias=.0,  # l2_weight=0.05,
+                         kernel_size=(3,7), dilation=3,
                          use_conv_bias=True, use_norm_bias=True, name='rb5'),
-            ResNeXtBlock(n_filters=n_filters, n_groups=16, l2_bias=0.01,  # l2_weight=0.01,
+            ResNeXtBlock(n_filters=n_filters, n_groups=8, l2_bias=.0,  # l2_weight=0.01,
+                         kernel_size=(3,7), dilation=2,
                          use_conv_bias=True, use_norm_bias=True, name='rb6'),
-            # ResNeXtBlock(n_filters=n_filters, n_groups=16, l2_bias=0.01,  # l2_weight=0.01,
-            #              use_conv_bias=True, use_norm_bias=True, name='rb7'),
-            # required if beam cut-off is 3 not 5
-            # layers.Conv2D(n_filters, (3, 1), groups=1,
-            #               padding='valid', kernel_initializer=tf.keras.initializers.HeNormal(),
-            #               kernel_regularizer=tf.keras.regularizers.l2(0.01),
-            #               bias_initializer='zeros', bias_regularizer=tf.keras.regularizers.l2(l2=l2_bias),
-            #               use_bias=True, name="final"),
+            ResNeXtBlock(n_filters=n_filters, n_groups=8, l2_bias=.0,  # l2_weight=0.05,
+                         kernel_size=(3,7), dilation=1,
+                         use_conv_bias=True, use_norm_bias=True, name='rb7'),
+            ResNeXtBlock(n_filters=n_filters, n_groups=8, l2_bias=.0,  # l2_weight=0.01,
+                         kernel_size=(3,7), dilation=1,
+                         use_conv_bias=True, use_norm_bias=True, name='rb8'),
+            # ResNeXtBlock(n_filters=n_filters, n_groups=8, l2_bias=.0, #l2_weight=0.01,
+            #              kernel_size=(5,9), dilation=1,
+            #              use_conv_bias=True, use_norm_bias=True, name='rb9'),
+            # ResNeXtBlock(n_filters=n_filters, n_groups=8, l2_bias=.0,  # l2_weight=0.01,
+            #              kernel_size=(5,9), dilation=1,
+            #              use_conv_bias=True, use_norm_bias=True, name='rb10'),
         ], name='enc0')
 
         self.latent_radial_energy = None
         self.latent_radial_energy_encoder = models.Sequential([
-            layers.Conv2D(n_filters, (9, 1), activation='elu', padding='valid',
+            layers.InputLayer(input_shape=(29, n_beams, n_filters)),
+            layers.Conv2D(n_filters, (5, 1), activation='elu', padding='valid',
                           kernel_initializer=tf.keras.initializers.HeNormal(),
-                          bias_initializer='zeros', bias_regularizer=tf.keras.regularizers.l2()),
-            layers.Conv2D(n_filters, (9, 1), activation='elu', padding='valid',
+                          bias_initializer='zeros'), #bias_regularizer=tf.keras.regularizers.l2()),
+            layers.Conv2D(n_filters, (5, 1), activation='elu', padding='valid',
                           kernel_initializer=tf.keras.initializers.HeNormal(),
-                          bias_initializer='zeros', bias_regularizer=tf.keras.regularizers.l2()),
+                          bias_initializer='zeros'), #bias_regularizer=tf.keras.regularizers.l2()),
             layers.LayerNormalization(center=True),
+            layers.Dropout(0.1),
 
-            layers.Conv2D(n_filters, (9, 1), activation='elu', padding='valid',
+            layers.Conv2D(n_filters, (5, 1), activation='elu', padding='valid',
                           kernel_initializer=tf.keras.initializers.HeNormal(),
-                          bias_initializer='zeros', bias_regularizer=tf.keras.regularizers.l2()),
-            layers.Conv2D(n_filters, (9, 1), activation='elu', padding='valid',
+                          bias_initializer='zeros'), #bias_regularizer=tf.keras.regularizers.l2()),
+            layers.Conv2D(n_filters, (5, 1), activation='elu', padding='valid',
                           kernel_initializer=tf.keras.initializers.HeNormal(),
-                          bias_initializer='zeros', bias_regularizer=tf.keras.regularizers.l2()),
+                          bias_initializer='zeros'), #bias_regularizer=tf.keras.regularizers.l2()),
             layers.LayerNormalization(center=True),
-            # layers.InputLayer(input_shape=(n_beams, len_beam - 14, n_filters)),
-            # ResNeXtBlock1D(n_filters=n_filters, n_groups=16, l2_bias=0.01, kernel_size=5,
-            #                use_conv_bias=True, use_norm_bias=True, name='rb6'),
-            # ResNeXtBlock1D(n_filters=n_filters, n_groups=16, l2_bias=0.01, kernel_size=5,
-            #                use_conv_bias=True, use_norm_bias=True, name='rb7'),
-            # ResNeXtBlock1D(n_filters=n_filters, n_groups=16, l2_bias=0.01, kernel_size=7,
-            #                use_conv_bias=True, use_norm_bias=True, name='rb8'),
-            # ResNeXtBlock1D(n_filters=n_filters, n_groups=16, l2_bias=0.01, kernel_size=7,
-            #                use_conv_bias=True, use_norm_bias=True, name='rb9'),
-            # ResNeXtBlock1D(n_filters=n_filters, n_groups=16, l2_bias=0.01, kernel_size=7,
-            #                use_conv_bias=True, use_norm_bias=True, name='rb10'),
-            # ResNeXtBlock1D(n_filters=n_filters, n_groups=16, l2_bias=0.01, kernel_size=7,
-            #                use_conv_bias=True, use_norm_bias=True, name='rb11'),
+            layers.Dropout(0.1),
+
+            layers.Conv2D(n_filters, (7, 1), activation='elu', padding='valid',
+                          kernel_initializer=tf.keras.initializers.HeNormal(),
+                          bias_initializer='zeros'),  # bias_regularizer=tf.keras.regularizers.l2()),
+            layers.Conv2D(n_filters, (7, 1), activation='elu', padding='valid',
+                          kernel_initializer=tf.keras.initializers.HeNormal(),
+                          bias_initializer='zeros'),  # bias_regularizer=tf.keras.regularizers.l2()),
+            layers.LayerNormalization(center=True),
+            layers.Dropout(0.1),
         ], name='enc1')
 
         # This maps the transposed energy map (batch x n_beams x len_beams) down to a radial energy over S^1
@@ -251,8 +265,14 @@ class PolarRegressor2D(tf.keras.Model):
         self.radial_energy_encoder = models.Sequential([
             layers.InputLayer(input_shape=(n_beams, n_filters)),
             layers.Dense(n_filters),
+            layers.Dropout(0.5),
             layers.Dense(1),
         ], name='enc2')
+
+        # \sum_{l=1}^L\left(d(k_l-1) \prod_{i=1}^{l-1} s_i\right)+1
+        _kernel = [3, 3, 7, 7, 7, 7, 7, 7, 7]
+        _dilation = [1, 1, 2, 3, 4, 3, 2, 1, 1]
+        self.receptive_field = np.sum([_dilation[l] * (_kernel[l]-1) for l in range(9)])
 
     @staticmethod
     def gaussian_smoothing(logits, size=8, sigma=1.):
@@ -283,7 +303,7 @@ class PolarRegressor2D(tf.keras.Model):
         x = tf.squeeze(self.radial_energy, axis=-1)
         x = tf.nn.log_softmax(x, axis=-1)
         if ema:
-            x = self.gaussian_smoothing(x, size=9, sigma=1.)
+            x = self.gaussian_smoothing(x, size=17, sigma=1.)
         return x
 
 
